@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.python-version
+.mypy_cache/
+.pytest_cache/
+*.egg-info
+
+# Local database and index artifacts
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local files
+.DS_Store
+.direnv

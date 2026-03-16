@@ -1,0 +1,26 @@
+# docsearch configuration file
+# Precedence: CLI flags > this file > built-in defaults
+
+[embedding]
+# Local sentence-transformers model name
+model_name = "all-MiniLM-L6-v2"
+# Where to cache downloaded model files
+model_cache_dir = "~/.cache/docsearch/models"
+# Number of chunks embedded per batch
+batch_size = 64
+
+[chunking]
+# Characters per chunk
+chunk_size = 500
+# Overlap characters between chunks
+chunk_overlap = 100
+
+[search]
+# Number of results returned by default
+top_k = 5
+# Optional cosine similarity threshold in [0,1], or omit
+# score_threshold = 0.35
+
+[storage]
+# Local libSQL database file path
+db_path = "~/.docsearch/index.db"
