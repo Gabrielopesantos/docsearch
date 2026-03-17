@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-import fitz
+import pymupdf
 
 from docsearch.chunking import chunk_text
 from docsearch.config import AppConfig
@@ -41,7 +41,7 @@ def sha256_file(path: Path) -> str:
 def extract_page_chunks(
     path: Path, chunk_size: int, chunk_overlap: int
 ) -> tuple[list[PageChunk], int]:
-    doc = fitz.open(path)
+    doc = pymupdf.open(path)
     page_chunks: list[PageChunk] = []
     page_count = doc.page_count
     try:
