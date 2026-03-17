@@ -153,9 +153,7 @@ def render_status(
         f"  {'Chunk size':<{label_w}} {cfg.chunking.chunk_size} chars "
         f"{dim('(' + str(cfg.chunking.chunk_overlap) + ' overlap)')}"
     )
-    lines.append(
-        f"  {'Config':<{label_w}} {dim(str(Path('~/.config/docsearch/config.toml')))}"
-    )
+    lines.append(f"  {'Config':<{label_w}} {dim(str(Path('~/.config/docsearch/config.toml')))}")
     lines.append("")
 
     if documents:
@@ -200,9 +198,7 @@ def render_sync(removed_docs: int, removed_chunks: int) -> str:
     lines: list[str] = []
     lines.append("")
     if removed_docs == 0:
-        lines.append(
-            f"  {green('All indexed files still exist on disk. Nothing to remove.')}"
-        )
+        lines.append(f"  {green('All indexed files still exist on disk. Nothing to remove.')}")
     else:
         lines.append(
             f"  Removed {bold_red(str(removed_docs))} document(s) "

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import libsql
 
@@ -126,7 +126,9 @@ class Database:
         self.conn.commit()
 
     def delete_document_by_path_or_hash(self, key: str) -> int:
-        cur = self.conn.execute("DELETE FROM documents WHERE file_path = ? OR file_hash = ?", (key, key))
+        cur = self.conn.execute(
+            "DELETE FROM documents WHERE file_path = ? OR file_hash = ?", (key, key)
+        )
         self.conn.commit()
         return int(cur.rowcount or 0)
 
@@ -189,19 +191,17 @@ class Database:
             """,
             (query_json, query_json, top_k),
         ).fetchall()
-        out: list[SearchResult] = []
-        for row in rows:
-            out.append(
-                SearchResult(
-                    file_path=str(row[0]),
-                    file_name=str(row[1]),
-                    page_number=int(row[2]),
-                    chunk_index=int(row[3]),
-                    content=str(row[4]),
-                    cosine_distance=float(row[5]),
-                )
+        return [
+            SearchResult(
+                file_path=str(row[0]),
+                file_name=str(row[1]),
+                page_number=int(row[2]),
+                chunk_index=int(row[3]),
+                content=str(row[4]),
+                cosine_distance=float(row[5]),
             )
-        return out
+            for row in rows
+        ]
 
     def list_all_documents(self) -> list[DocumentRecord]:
         rows = self.conn.execute(
@@ -235,10 +235,7 @@ class Database:
             ORDER BY d.indexed_at DESC
             """
         ).fetchall()
-        return [
-            (str(r[0]), str(r[1]), str(r[2]), int(r[3]), int(r[4]), str(r[5]))
-            for r in rows
-        ]
+        return [(str(r[0]), str(r[1]), str(r[2]), int(r[3]), int(r[4]), str(r[5])) for r in rows]
 
     def stats(self) -> dict[str, int]:
         docs = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-
-import tomllib
-
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "docsearch" / "config.toml"
 DEFAULT_DB_PATH = Path.home() / ".docsearch" / "index.db"
@@ -117,9 +115,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, boo
             chunking=replace(
                 cfg.chunking,
                 chunk_size=int(chunking.get("chunk_size", cfg.chunking.chunk_size)),
-                chunk_overlap=int(
-                    chunking.get("chunk_overlap", cfg.chunking.chunk_overlap)
-                ),
+                chunk_overlap=int(chunking.get("chunk_overlap", cfg.chunking.chunk_overlap)),
             ),
         )
 

@@ -22,6 +22,7 @@
           packages = with pkgs; [
             python312
             uv
+            ruff
             mupdf
             pkg-config
             gcc

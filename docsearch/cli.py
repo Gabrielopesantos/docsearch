@@ -13,9 +13,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="docsearch",
         description="Index and search PDFs with local embeddings",
     )
-    parser.add_argument(
-        "--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config TOML"
-    )
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config TOML")
     parser.add_argument("--db", help="Override database path")
     parser.add_argument("--model", help="Override embedding model name")
     parser.add_argument("--batch-size", type=int, help="Override embedding batch size")
@@ -54,9 +52,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("status", help="Show index stats and document listing")
-    sub.add_parser(
-        "sync", help="Remove index entries for PDFs that no longer exist on disk"
-    )
+    sub.add_parser("sync", help="Remove index entries for PDFs that no longer exist on disk")
 
     p_remove = sub.add_parser("remove", help="Remove a document by path or hash")
     p_remove.add_argument("key", help="Absolute file path or SHA-256 hash")
@@ -69,9 +65,7 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _cmd_index(
-    args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool
-) -> None:
+def _cmd_index(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
     from docsearch.indexer import index_directory
 
     stats = index_directory(
@@ -90,9 +84,7 @@ def _cmd_index(
         print(render_index_stats(stats))
 
 
-def _cmd_search(
-    args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool
-) -> None:
+def _cmd_search(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
     from docsearch.search import search_query
 
     results = search_query(

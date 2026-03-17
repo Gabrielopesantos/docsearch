@@ -39,9 +39,7 @@ def search_query(
     update_model: bool = False,
 ) -> list[RenderedResult]:
     requested_k = top_k if top_k is not None else cfg.search.top_k
-    threshold = (
-        score_threshold if score_threshold is not None else cfg.search.score_threshold
-    )
+    threshold = score_threshold if score_threshold is not None else cfg.search.score_threshold
 
     model = load_embedder(
         model_name=cfg.embedding.model_name,

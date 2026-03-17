@@ -47,10 +47,10 @@ def extract_page_chunks(
     try:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text")
-            for chunk in chunk_text(
-                text, chunk_size=chunk_size, chunk_overlap=chunk_overlap
-            ):
-                page_chunks.append(PageChunk(page_number=i, text=chunk))
+            page_chunks.extend(
+                PageChunk(page_number=i, text=chunk)
+                for chunk in chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            )
     finally:
         doc.close()
     return page_chunks, page_count
@@ -157,10 +157,7 @@ def index_directory(
             page_count=page_count,
         )
 
-        rows = [
-            (i, c.page_number, c.text, vector_rows[i])
-            for i, c in enumerate(page_chunks)
-        ]
+        rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
         inserted_chunks = db.insert_chunks(doc_id, rows)
 
         if replaced:
