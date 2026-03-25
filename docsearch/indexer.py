@@ -59,18 +59,33 @@ def extract_page_chunks(
     return page_chunks, page_count
 
 
-def index_directory(
-    directory: str,
+_PDF_MAGIC = b"%PDF-"
+
+
+def _is_pdf_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return f.read(5) == _PDF_MAGIC
+    except OSError:
+        return False
+
+
+def index_path(
+    path: str,
     db: Database,
     cfg: AppConfig,
     reindex: bool = False,
     update_model: bool = False,
 ) -> IndexStats:
-    base = Path(directory).expanduser().resolve()
-    if not base.exists() or not base.is_dir():
-        raise ValueError(f"Directory does not exist: {base}")
-
-    pdfs = sorted(base.rglob("*.pdf"))
+    base = Path(path).expanduser().resolve()
+    if base.is_file():
+        if not _is_pdf_file(base):
+            raise ValueError(f"Not a PDF file: {base}")
+        pdfs = [base]
+    elif base.is_dir():
+        pdfs = sorted(base.rglob("*.pdf"))
+    else:
+        raise ValueError(f"Path does not exist: {base}")
     model = load_embedder(
         model_name=cfg.embedding.model_name,
         cache_dir=cfg.embedding.model_cache_dir,

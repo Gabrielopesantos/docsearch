@@ -34,8 +34,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_index = sub.add_parser("index", help="Index all PDFs in a directory")
-    p_index.add_argument("directory", help="Directory containing PDFs")
+    p_index = sub.add_parser("index", help="Index all PDFs in a directory or a single PDF file")
+    p_index.add_argument("path", help="Directory containing PDFs or a single PDF file")
     p_index.add_argument(
         "--reindex",
         action="store_true",
@@ -74,10 +74,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_index(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
-    from docsearch.indexer import index_directory
+    from docsearch.indexer import index_path
 
-    stats = index_directory(
-        directory=args.directory,
+    stats = index_path(
+        path=args.path,
         db=db,
         cfg=cfg,
         reindex=args.reindex,

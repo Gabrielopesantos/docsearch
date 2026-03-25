@@ -56,8 +56,9 @@ uv run docsearch --help
 ## Quick start
 
 ```bash
-# Index all PDFs in a directory
+# Index all PDFs in a directory (or a single PDF file)
 docsearch index ~/Documents
+docsearch index ~/Documents/paper.pdf
 
 # Search indexed content
 docsearch search "what does the SLA policy say?"
@@ -100,8 +101,12 @@ See [`config.toml.example`](./config.toml.example) for the full template with co
 # Index a directory (skips already-indexed files by hash)
 docsearch index ./pdfs
 
+# Index a single PDF file
+docsearch index ./pdfs/paper.pdf
+
 # Force re-index (replaces existing entries for changed files)
 docsearch index --reindex ./pdfs
+docsearch index --reindex ./pdfs/paper.pdf
 
 # Force model re-download from HuggingFace Hub
 docsearch --update-model index ./pdfs
