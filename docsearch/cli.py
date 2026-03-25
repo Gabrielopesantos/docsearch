@@ -50,6 +50,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Filter by minimum similarity score",
     )
+    p_search.add_argument(
+        "--doc",
+        dest="docs",
+        metavar="PATH_OR_HASH",
+        action="append",
+        default=None,
+        help="Limit search to this document (repeat for multiple); accepts file path or SHA-256 hash",
+    )
 
     sub.add_parser("status", help="Show index stats and document listing")
     sub.add_parser("sync", help="Remove index entries for PDFs that no longer exist on disk")
@@ -85,16 +93,23 @@ def _cmd_index(args: argparse.Namespace, cfg, db, output_fmt: str, update_model:
 
 
 def _cmd_search(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
+    import sys
+
     from docsearch.search import search_query
 
-    results = search_query(
-        query=args.query,
-        db=db,
-        cfg=cfg,
-        top_k=args.top_k,
-        score_threshold=args.score_threshold,
-        update_model=update_model,
-    )
+    try:
+        results = search_query(
+            query=args.query,
+            db=db,
+            cfg=cfg,
+            top_k=args.top_k,
+            score_threshold=args.score_threshold,
+            update_model=update_model,
+            document_keys=args.docs,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if output_fmt == "json":
         print(
@@ -140,6 +155,7 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
         DocumentInfo(
             file_name=r[0],
             file_path=r[1],
+            file_hash=r[2],
             page_count=r[3],
             chunk_count=r[4],
             indexed_at=r[5],
@@ -163,6 +179,7 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
                         {
                             "file_name": d.file_name,
                             "file_path": d.file_path,
+                            "file_hash": d.file_hash,
                             "file_exists": d.file_exists,
                             "page_count": d.page_count,
                             "chunk_count": d.chunk_count,

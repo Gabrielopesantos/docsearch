@@ -119,6 +119,13 @@ docsearch search "machine learning" -n 10
 # Filter by minimum similarity score (0.0 - 1.0)
 docsearch search "embeddings" --score-threshold 0.7
 
+# Limit search to a specific document (by path or hash prefix)
+docsearch search --doc /path/to/paper.pdf "query"
+docsearch search --doc a3f9c2b1d408 "query"
+
+# Multiple documents (repeat --doc)
+docsearch search --doc <hash1> --doc <hash2> "query"
+
 # JSON output for piping to other tools
 docsearch -o json search "query" | jq '.results[0]'
 ```
@@ -126,11 +133,12 @@ docsearch -o json search "query" | jq '.results[0]'
 ### Status and maintenance
 
 ```bash
-# Show index stats + per-document breakdown
+# Show index stats + per-document breakdown (includes short hash for each document)
 docsearch status
 
-# JSON output
+# JSON output (includes file_hash field per document)
 docsearch -o json status
+docsearch -o json status | jq '.documents[].file_hash'
 
 # Remove index entries for deleted PDFs
 docsearch sync

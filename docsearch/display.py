@@ -116,6 +116,7 @@ def render_search_results(query: str, results: list[RenderedResult]) -> str:
 class DocumentInfo:
     file_name: str
     file_path: str
+    file_hash: str
     page_count: int
     chunk_count: int
     indexed_at: str
@@ -163,6 +164,7 @@ def render_status(
         for d in documents:
             deleted_tag = f"  {bold_red('DELETED')}" if not d.file_exists else ""
             date_part = d.indexed_at[:10] if d.indexed_at else ""
+            short_hash = d.file_hash[:12] if d.file_hash else ""
             # Pad the plain name first, then colorize to avoid ANSI codes
             # breaking alignment
             padded_name = d.file_name.ljust(name_w)
@@ -171,6 +173,7 @@ def render_status(
                 f" {d.page_count:>3} pages"
                 f"  {d.chunk_count:>5} chunks"
                 f"   {dim(date_part)}"
+                f"   {dim(short_hash)}"
                 f"{deleted_tag}"
             )
         lines.append("")

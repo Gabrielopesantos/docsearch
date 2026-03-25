@@ -37,6 +37,7 @@ def search_query(
     top_k: int | None = None,
     score_threshold: float | None = None,
     update_model: bool = False,
+    document_keys: list[str] | None = None,
 ) -> list[RenderedResult]:
     requested_k = top_k if top_k is not None else cfg.search.top_k
     threshold = score_threshold if score_threshold is not None else cfg.search.score_threshold
@@ -53,7 +54,8 @@ def search_query(
         show_progress_bar=False,
     )[0].tolist()
 
-    rows = db.search_chunks(vector, requested_k)
+    doc_ids = db.resolve_document_ids(document_keys) if document_keys else None
+    rows = db.search_chunks(vector, requested_k, document_ids=doc_ids)
     out: list[RenderedResult] = []
     for row in rows:
         score = _to_similarity(row.cosine_distance)

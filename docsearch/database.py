@@ -173,24 +173,79 @@ class Database:
         self.conn.commit()
         return inserted
 
-    def search_chunks(self, query_embedding: list[float], top_k: int) -> list[SearchResult]:
+    def resolve_document_ids(self, keys: list[str]) -> list[int]:
+        """Resolve path-or-hash strings to document IDs. Raises ValueError for unknown keys."""
+        ids: list[int] = []
+        unresolved: list[str] = []
+        for key in keys:
+            if len(key) >= 4 and all(c in "0123456789abcdefABCDEF" for c in key):
+                rows = self.conn.execute(
+                    "SELECT id FROM documents WHERE file_hash LIKE ? || '%'", (key,)
+                ).fetchall()
+                if len(rows) > 1:
+                    raise ValueError(f"ambiguous hash prefix {key!r} matches {len(rows)} documents")
+                if rows:
+                    ids.append(int(rows[0][0]))
+                else:
+                    unresolved.append(key)
+            else:
+                row = self.conn.execute(
+                    "SELECT id FROM documents WHERE file_path = ?", (key,)
+                ).fetchone()
+                if row is None:
+                    unresolved.append(key)
+                else:
+                    ids.append(int(row[0]))
+        if unresolved:
+            keys_str = ", ".join(repr(k) for k in unresolved)
+            raise ValueError(f"unknown document key(s): {keys_str}")
+        return ids
+
+    def search_chunks(
+        self,
+        query_embedding: list[float],
+        top_k: int,
+        document_ids: list[int] | None = None,
+    ) -> list[SearchResult]:
         query_json = json.dumps(query_embedding)
-        rows = self.conn.execute(
-            """
-            SELECT
-                d.file_path,
-                d.file_name,
-                c.page_number,
-                c.chunk_index,
-                c.content,
-                vector_distance_cos(c.embedding, vector32(?)) AS cosine_distance
-            FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
-            JOIN chunks c ON c.rowid = vt.id
-            JOIN documents d ON d.id = c.document_id
-            ORDER BY cosine_distance ASC
-            """,
-            (query_json, query_json, top_k),
-        ).fetchall()
+        if document_ids is None:
+            rows = self.conn.execute(
+                """
+                SELECT
+                    d.file_path,
+                    d.file_name,
+                    c.page_number,
+                    c.chunk_index,
+                    c.content,
+                    vector_distance_cos(c.embedding, vector32(?)) AS cosine_distance
+                FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
+                JOIN chunks c ON c.rowid = vt.id
+                JOIN documents d ON d.id = c.document_id
+                ORDER BY cosine_distance ASC
+                """,
+                (query_json, query_json, top_k),
+            ).fetchall()
+        else:
+            vector_top_k = max(top_k * 10, 200)
+            placeholders = ",".join("?" for _ in document_ids)
+            rows = self.conn.execute(
+                f"""
+                SELECT
+                    d.file_path,
+                    d.file_name,
+                    c.page_number,
+                    c.chunk_index,
+                    c.content,
+                    vector_distance_cos(c.embedding, vector32(?)) AS cosine_distance
+                FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
+                JOIN chunks c ON c.rowid = vt.id
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.document_id IN ({placeholders})
+                ORDER BY cosine_distance ASC
+                LIMIT ?
+                """,
+                (query_json, query_json, vector_top_k, *document_ids, top_k),
+            ).fetchall()
         return [
             SearchResult(
                 file_path=str(row[0]),
