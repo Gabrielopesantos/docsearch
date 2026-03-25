@@ -89,8 +89,11 @@ def ensure_default_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[Path
 def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, bool]:
     config_path, created = ensure_default_config(config_path)
     data: dict[str, Any]
-    with config_path.open("rb") as f:
-        data = tomllib.load(f)
+    try:
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"error: invalid TOML in config file {config_path}: {exc}") from exc
 
     cfg = DEFAULT_CONFIG
 
@@ -110,13 +113,19 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, boo
 
     chunking = data.get("chunking", {})
     if chunking:
+        chunk_size = int(chunking.get("chunk_size", cfg.chunking.chunk_size))
+        chunk_overlap = int(chunking.get("chunk_overlap", cfg.chunking.chunk_overlap))
+        if chunk_size <= 0:
+            raise SystemExit(f"error: chunk_size must be > 0, got {chunk_size}")
+        if chunk_overlap < 0:
+            raise SystemExit(f"error: chunk_overlap must be >= 0, got {chunk_overlap}")
+        if chunk_overlap >= chunk_size:
+            raise SystemExit(
+                f"error: chunk_overlap ({chunk_overlap}) must be < chunk_size ({chunk_size})"
+            )
         cfg = replace(
             cfg,
-            chunking=replace(
-                cfg.chunking,
-                chunk_size=int(chunking.get("chunk_size", cfg.chunking.chunk_size)),
-                chunk_overlap=int(chunking.get("chunk_overlap", cfg.chunking.chunk_overlap)),
-            ),
+            chunking=replace(cfg.chunking, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
         )
 
     search = data.get("search", {})
@@ -164,9 +173,20 @@ def with_overrides(
     if batch_size is not None:
         out = replace(out, embedding=replace(out.embedding, batch_size=batch_size))
     if chunk_size is not None:
+        if chunk_size <= 0:
+            raise SystemExit(f"error: chunk_size must be > 0, got {chunk_size}")
         out = replace(out, chunking=replace(out.chunking, chunk_size=chunk_size))
     if chunk_overlap is not None:
+        if chunk_overlap < 0:
+            raise SystemExit(f"error: chunk_overlap must be >= 0, got {chunk_overlap}")
         out = replace(out, chunking=replace(out.chunking, chunk_overlap=chunk_overlap))
+    # Cross-field validation after both may have been applied
+    final_size = out.chunking.chunk_size
+    final_overlap = out.chunking.chunk_overlap
+    if final_overlap >= final_size:
+        raise SystemExit(
+            f"error: chunk_overlap ({final_overlap}) must be < chunk_size ({final_size})"
+        )
     if top_k is not None:
         out = replace(out, search=replace(out.search, top_k=top_k))
     if score_threshold_set:

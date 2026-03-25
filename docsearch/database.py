@@ -27,12 +27,25 @@ class SearchResult:
     cosine_distance: float
 
 
+@dataclass(frozen=True)
+class DocumentSummary:
+    """Aggregated document row returned by list_documents_with_chunk_counts."""
+
+    file_name: str
+    file_path: str
+    file_hash: str
+    page_count: int
+    chunk_count: int
+    indexed_at: str
+
+
 class Database:
     def __init__(self, db_path: str, vector_dim: int = 384) -> None:
         self.db_path = str(Path(db_path).expanduser())
         self.vector_dim = vector_dim
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = libsql.connect(self.db_path)
+        self.init_schema()
 
     def close(self) -> None:
         self.conn.close()
@@ -154,27 +167,31 @@ class Database:
         document_id: int,
         rows: Iterable[tuple[int, int, str, list[float]]],
     ) -> int:
-        inserted = 0
-        for chunk_index, page_number, content, embedding in rows:
-            self.conn.execute(
+        params = [
+            (document_id, chunk_index, page_number, content, json.dumps(embedding))
+            for chunk_index, page_number, content, embedding in rows
+        ]
+        if params:
+            self.conn.executemany(
                 """
                 INSERT INTO chunks (document_id, chunk_index, page_number, content, embedding)
                 VALUES (?, ?, ?, ?, vector32(?))
                 """,
-                (
-                    document_id,
-                    chunk_index,
-                    page_number,
-                    content,
-                    json.dumps(embedding),
-                ),
+                params,
             )
-            inserted += 1
-        self.conn.commit()
-        return inserted
+            self.conn.commit()
+        return len(params)
 
     def resolve_document_ids(self, keys: list[str]) -> list[int]:
-        """Resolve path-or-hash strings to document IDs. Raises ValueError for unknown keys."""
+        """Resolve path-or-hash strings to document IDs.
+
+        A key is treated as a hash prefix when it is at least 4 characters long and
+        contains only hexadecimal digits.  Use absolute paths to avoid ambiguity —
+        a relative path such as ``deadbeef.pdf`` would be misclassified as a hash
+        prefix.
+
+        Raises ValueError for ambiguous hash prefixes or unknown keys.
+        """
         ids: list[int] = []
         unresolved: list[str] = []
         for key in keys:
@@ -273,8 +290,8 @@ class Database:
             for r in rows
         ]
 
-    def list_documents_with_chunk_counts(self) -> list[tuple[str, str, str, int, int, str]]:
-        """Return (file_name, file_path, file_hash, page_count, chunk_count, indexed_at) per doc."""
+    def list_documents_with_chunk_counts(self) -> list[DocumentSummary]:
+        """Return one DocumentSummary per indexed document, newest first."""
         rows = self.conn.execute(
             """
             SELECT
@@ -290,7 +307,25 @@ class Database:
             ORDER BY d.indexed_at DESC
             """
         ).fetchall()
-        return [(str(r[0]), str(r[1]), str(r[2]), int(r[3]), int(r[4]), str(r[5])) for r in rows]
+        return [
+            DocumentSummary(
+                file_name=str(r[0]),
+                file_path=str(r[1]),
+                file_hash=str(r[2]),
+                page_count=int(r[3]),
+                chunk_count=int(r[4]),
+                indexed_at=str(r[5]),
+            )
+            for r in rows
+        ]
+
+    def delete_documents_batch(self, ids: list[int]) -> None:
+        """Delete multiple documents (and their chunks via CASCADE) in a single transaction."""
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self.conn.execute(f"DELETE FROM documents WHERE id IN ({placeholders})", ids)
+        self.conn.commit()
 
     def stats(self) -> dict[str, int]:
         docs = self.conn.execute("SELECT COUNT(*) FROM documents").fetchone()

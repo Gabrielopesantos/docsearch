@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pymupdf
@@ -10,6 +11,8 @@ from docsearch.chunking import chunk_text
 from docsearch.config import AppConfig
 from docsearch.database import Database
 from docsearch.embedding import load_embedder
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -77,104 +80,73 @@ def index_directory(
     stats = IndexStats(scanned=len(pdfs))
 
     for pdf_path in pdfs:
-        replaced = False
-        file_hash = sha256_file(pdf_path)
-        existing_hash = db.get_document_by_hash(file_hash)
-        if existing_hash is not None:
-            if reindex:
-                db.delete_document(existing_hash.id)
-                replaced = True
-            else:
-                stats = IndexStats(
-                    scanned=stats.scanned,
-                    indexed=stats.indexed,
-                    skipped=stats.skipped + 1,
-                    reindexed=stats.reindexed,
-                    chunks=stats.chunks,
+        try:
+            replaced = False
+            file_hash = sha256_file(pdf_path)
+            existing_hash = db.get_document_by_hash(file_hash)
+            if existing_hash is not None:
+                if reindex:
+                    db.delete_document(existing_hash.id)
+                    replaced = True
+                else:
+                    stats = replace(stats, skipped=stats.skipped + 1)
+                    continue
+
+            existing_path = db.get_document_by_path(str(pdf_path))
+            if existing_path is not None:
+                if reindex:
+                    db.delete_document(existing_path.id)
+                    replaced = True
+                else:
+                    stats = replace(stats, skipped=stats.skipped + 1)
+                    continue
+
+            page_chunks, page_count = extract_page_chunks(
+                pdf_path,
+                chunk_size=cfg.chunking.chunk_size,
+                chunk_overlap=cfg.chunking.chunk_overlap,
+            )
+            if not page_chunks:
+                doc_id = db.insert_document(
+                    file_path=str(pdf_path),
+                    file_hash=file_hash,
+                    file_name=pdf_path.name,
+                    page_count=page_count,
                 )
+                if doc_id:
+                    if replaced:
+                        stats = replace(stats, reindexed=stats.reindexed + 1)
+                    else:
+                        stats = replace(stats, indexed=stats.indexed + 1)
                 continue
 
-        existing_path = db.get_document_by_path(str(pdf_path))
-        if existing_path is not None:
-            if reindex:
-                db.delete_document(existing_path.id)
-                replaced = True
-            else:
-                stats = IndexStats(
-                    scanned=stats.scanned,
-                    indexed=stats.indexed,
-                    skipped=stats.skipped + 1,
-                    reindexed=stats.reindexed,
-                    chunks=stats.chunks,
-                )
-                continue
+            texts = [c.text for c in page_chunks]
+            vectors = model.encode(
+                texts,
+                batch_size=cfg.embedding.batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            vector_rows = vectors.tolist()
 
-        page_chunks, page_count = extract_page_chunks(
-            pdf_path,
-            chunk_size=cfg.chunking.chunk_size,
-            chunk_overlap=cfg.chunking.chunk_overlap,
-        )
-        if not page_chunks:
             doc_id = db.insert_document(
                 file_path=str(pdf_path),
                 file_hash=file_hash,
                 file_name=pdf_path.name,
                 page_count=page_count,
             )
-            if doc_id:
-                if replaced:
-                    stats = IndexStats(
-                        scanned=stats.scanned,
-                        indexed=stats.indexed,
-                        skipped=stats.skipped,
-                        reindexed=stats.reindexed + 1,
-                        chunks=stats.chunks,
-                    )
-                else:
-                    stats = IndexStats(
-                        scanned=stats.scanned,
-                        indexed=stats.indexed + 1,
-                        skipped=stats.skipped,
-                        reindexed=stats.reindexed,
-                        chunks=stats.chunks,
-                    )
-            continue
 
-        texts = [c.text for c in page_chunks]
-        vectors = model.encode(
-            texts,
-            batch_size=cfg.embedding.batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        vector_rows = vectors.tolist()
+            rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
+            inserted_chunks = db.insert_chunks(doc_id, rows)
 
-        doc_id = db.insert_document(
-            file_path=str(pdf_path),
-            file_hash=file_hash,
-            file_name=pdf_path.name,
-            page_count=page_count,
-        )
+            if replaced:
+                stats = replace(stats, reindexed=stats.reindexed + 1, chunks=stats.chunks + inserted_chunks)
+            else:
+                stats = replace(stats, indexed=stats.indexed + 1, chunks=stats.chunks + inserted_chunks)
 
-        rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
-        inserted_chunks = db.insert_chunks(doc_id, rows)
-
-        if replaced:
-            stats = IndexStats(
-                scanned=stats.scanned,
-                indexed=stats.indexed,
-                skipped=stats.skipped,
-                reindexed=stats.reindexed + 1,
-                chunks=stats.chunks + inserted_chunks,
-            )
-        else:
-            stats = IndexStats(
-                scanned=stats.scanned,
-                indexed=stats.indexed + 1,
-                skipped=stats.skipped,
-                reindexed=stats.reindexed,
-                chunks=stats.chunks + inserted_chunks,
-            )
+        except Exception as exc:
+            logger.warning("Skipping %s: %s", pdf_path, exc)
+            stats = replace(stats, skipped=stats.skipped + 1)
 
     return stats

@@ -1,22 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from docsearch.config import AppConfig
 from docsearch.database import Database
+from docsearch.display import RenderedResult
 from docsearch.embedding import load_embedder
-
-
-@dataclass(frozen=True)
-class RenderedResult:
-    file_name: str
-    file_path: str
-    page_number: int
-    chunk_index: int
-    score: float
-    snippet: str
-    file_exists: bool
 
 
 def _to_similarity(cosine_distance: float) -> float:

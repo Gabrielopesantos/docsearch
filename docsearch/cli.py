@@ -153,13 +153,13 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
 
     documents = [
         DocumentInfo(
-            file_name=r[0],
-            file_path=r[1],
-            file_hash=r[2],
-            page_count=r[3],
-            chunk_count=r[4],
-            indexed_at=r[5],
-            file_exists=Path(r[1]).exists(),
+            file_name=r.file_name,
+            file_path=r.file_path,
+            file_hash=r.file_hash,
+            page_count=r.page_count,
+            chunk_count=r.chunk_count,
+            indexed_at=r.indexed_at,
+            file_exists=Path(r.file_path).exists(),
         )
         for r in rows
     ]
@@ -219,9 +219,7 @@ def _cmd_sync(db, output_fmt: str) -> None:
 
     missing_ids = [d.id for d in missing]
     chunk_count = db.count_chunks_for_documents(missing_ids)
-
-    for d in missing:
-        db.delete_document(d.id)
+    db.delete_documents_batch(missing_ids)
 
     if output_fmt == "json":
         print(
@@ -275,8 +273,18 @@ def main() -> None:
 
     from docsearch.database import Database
 
-    db = Database(cfg.storage.db_path)
-    db.init_schema()
+    vector_dim = 384  # default; overridden below for commands that load the model
+    if args.command in ("index", "search"):
+        from docsearch.embedding import load_embedder
+
+        _model = load_embedder(
+            model_name=cfg.embedding.model_name,
+            cache_dir=cfg.embedding.model_cache_dir,
+            update=update_model,
+        )
+        vector_dim = _model.get_sentence_embedding_dimension()
+
+    db = Database(cfg.storage.db_path, vector_dim=vector_dim)
 
     try:
         if created and output_fmt == "pretty":

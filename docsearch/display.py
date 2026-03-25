@@ -8,7 +8,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from docsearch.config import AppConfig
     from docsearch.indexer import IndexStats
-    from docsearch.search import RenderedResult
+
+
+@dataclass(frozen=True)
+class RenderedResult:
+    file_name: str
+    file_path: str
+    page_number: int
+    chunk_index: int
+    score: float
+    snippet: str
+    file_exists: bool
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +133,14 @@ class DocumentInfo:
     file_exists: bool
 
 
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n} {unit}"
+        n //= 1024
+    return f"{n} TB"
+
+
 def render_status(
     cfg: AppConfig,
     db_path: str,
@@ -135,13 +153,6 @@ def render_status(
     lines.append("")
     lines.append(f"  {bold_white('docsearch index status')}")
     lines.append("")
-
-    def _human_size(n: int) -> str:
-        for unit in ("B", "KB", "MB", "GB"):
-            if n < 1024:
-                return f"{n} {unit}"
-            n //= 1024
-        return f"{n} TB"
 
     label_w = 14
     lines.append(
