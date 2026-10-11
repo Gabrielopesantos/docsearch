@@ -2,12 +2,16 @@
 # Precedence: CLI flags > this file > built-in defaults
 
 [embedding]
-# Local sentence-transformers model name
-model_name = "all-MiniLM-L6-v2"
+# Local sentence-transformers model name. The index remembers which model
+# built it; changing this needs a new index (--db or delete the index file).
+# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-m3" is stronger.
+model_name = "intfloat/multilingual-e5-small"
 # Where to cache downloaded model files
 model_cache_dir = "~/.cache/docsearch/models"
 # Number of chunks embedded per batch
 batch_size = 64
+# "auto" (GPU if available), "cpu" or "cuda". Changes speed only, not results.
+device = "auto"
 
 [chunking]
 # Characters per chunk

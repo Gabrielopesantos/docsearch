@@ -7,6 +7,30 @@ from pathlib import Path
 
 import libsql
 
+# Bump when the table layout changes in a way old indexes cannot be read.
+SCHEMA_VERSION = "2"
+
+
+class IndexMismatchError(ValueError):
+    """The index on disk was built with settings that differ from the config."""
+
+
+@dataclass(frozen=True)
+class IndexMeta:
+    """Settings that fix how an index was built. Vectors from different values do not mix."""
+
+    model_name: str
+    dim: int
+    chunker_version: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "model_name": self.model_name,
+            "dim": str(self.dim),
+            "chunker_version": self.chunker_version,
+            "schema_version": SCHEMA_VERSION,
+        }
+
 
 @dataclass(frozen=True)
 class DocumentRecord:
@@ -65,6 +89,24 @@ class Database:
             """
         )
         self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        self._create_chunk_tables()
+        self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_documents_file_hash
+            ON documents (file_hash)
+            """
+        )
+        self.conn.commit()
+
+    def _create_chunk_tables(self) -> None:
+        self.conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,12 +120,6 @@ class Database:
         )
         self.conn.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_documents_file_hash
-            ON documents (file_hash)
-            """
-        )
-        self.conn.execute(
-            """
             CREATE INDEX IF NOT EXISTS idx_chunks_document_id
             ON chunks (document_id)
             """
@@ -93,6 +129,50 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_chunks_vector
             ON chunks (libsql_vector_idx(embedding))
             """
+        )
+
+    def get_meta(self) -> dict[str, str]:
+        rows = self.conn.execute("SELECT key, value FROM meta").fetchall()
+        return {str(r[0]): str(r[1]) for r in rows}
+
+    def ensure_compatible(self, expected: IndexMeta) -> None:
+        """Check that the index was built with the configured model and chunker.
+
+        An empty index is (re)initialised for the expected settings. A non-empty
+        index with different or missing metadata raises IndexMismatchError; data
+        is never deleted here.
+        """
+        stored = self.get_meta()
+        if stored:
+            diffs = [
+                f"{key}: index has {stored.get(key)!r}, config wants {value!r}"
+                for key, value in expected.as_dict().items()
+                if stored.get(key) != value
+            ]
+            if not diffs:
+                return
+            if self.stats()["documents"] > 0:
+                raise IndexMismatchError(
+                    f"index at {self.db_path} was built with other settings:\n  "
+                    + "\n  ".join(diffs)
+                    + "\nUse --db <new path> for a new index, or delete the index file "
+                    "and index again."
+                )
+        elif self.stats()["documents"] > 0:
+            raise IndexMismatchError(
+                f"index at {self.db_path} was built by an older docsearch version "
+                "and has no model metadata.\nUse --db <new path> for a new index, or "
+                "delete the index file and index again."
+            )
+
+        # Empty index: rebuild the chunk tables for this vector size and record settings.
+        self.vector_dim = expected.dim
+        self.conn.execute("DROP INDEX IF EXISTS idx_chunks_vector")
+        self.conn.execute("DROP TABLE IF EXISTS chunks")
+        self._create_chunk_tables()
+        self.conn.execute("DELETE FROM meta")
+        self.conn.executemany(
+            "INSERT INTO meta (key, value) VALUES (?, ?)", list(expected.as_dict().items())
         )
         self.conn.commit()
 

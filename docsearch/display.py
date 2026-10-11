@@ -149,6 +149,7 @@ def render_status(
     total_documents: int,
     total_chunks: int,
     documents: list[DocumentInfo],
+    index_model: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("")
@@ -161,7 +162,13 @@ def render_status(
     )
     lines.append(f"  {'Documents':<{label_w}} {bold_white(str(total_documents))}")
     lines.append(f"  {'Chunks':<{label_w}} {bold_white(str(total_chunks))}")
-    lines.append(f"  {'Model':<{label_w}} {cyan(cfg.embedding.model_name)}")
+    model = index_model or cfg.embedding.model_name
+    lines.append(f"  {'Model':<{label_w}} {cyan(model)}")
+    if index_model and index_model != cfg.embedding.model_name:
+        lines.append(
+            f"  {'':<{label_w}} {yellow('config wants ' + cfg.embedding.model_name)}"
+            f" {dim('(search will refuse; use a new --db)')}"
+        )
     lines.append(
         f"  {'Chunk size':<{label_w}} {cfg.chunking.chunk_size} chars "
         f"{dim('(' + str(cfg.chunking.chunk_overlap) + ' overlap)')}"

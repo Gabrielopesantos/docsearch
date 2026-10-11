@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Stored in the index metadata. Bump when chunk boundaries change.
+CHUNKER_VERSION = "1"
+
 
 def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     clean = " ".join(text.split())

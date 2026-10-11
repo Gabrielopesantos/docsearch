@@ -12,9 +12,10 @@ DEFAULT_MODEL_CACHE_DIR = Path.home() / ".cache" / "docsearch" / "models"
 
 @dataclass(frozen=True)
 class EmbeddingConfig:
-    model_name: str = "all-MiniLM-L6-v2"
+    model_name: str = "intfloat/multilingual-e5-small"
     model_cache_dir: str = str(DEFAULT_MODEL_CACHE_DIR)
     batch_size: int = 64
+    device: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -48,12 +49,16 @@ DEFAULT_CONFIG_TEMPLATE = """# docsearch configuration file
 # Precedence: CLI flags > this file > built-in defaults
 
 [embedding]
-# Local sentence-transformers model name
-model_name = "all-MiniLM-L6-v2"
+# Local sentence-transformers model name. The index remembers which model
+# built it; changing this needs a new index (--db or delete the index file).
+# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-m3" is stronger.
+model_name = "intfloat/multilingual-e5-small"
 # Where to cache downloaded model files
 model_cache_dir = "~/.cache/docsearch/models"
 # Number of chunks embedded per batch
 batch_size = 64
+# "auto" (GPU if available), "cpu" or "cuda". Changes speed only, not results.
+device = "auto"
 
 [chunking]
 # Characters per chunk
@@ -75,6 +80,15 @@ db_path = "~/.docsearch/index.db"
 
 def _expand_path(value: str) -> str:
     return str(Path(value).expanduser())
+
+
+_DEVICES = ("auto", "cpu", "cuda")
+
+
+def _check_device(value: str) -> str:
+    if value not in _DEVICES:
+        raise SystemExit(f"error: device must be one of {', '.join(_DEVICES)}, got {value!r}")
+    return value
 
 
 def ensure_default_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[Path, bool]:
@@ -108,6 +122,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, boo
                     embedding.get("model_cache_dir", cfg.embedding.model_cache_dir)
                 ),
                 batch_size=int(embedding.get("batch_size", cfg.embedding.batch_size)),
+                device=_check_device(str(embedding.get("device", cfg.embedding.device))),
             ),
         )
 
@@ -159,6 +174,7 @@ def with_overrides(
     db_path: str | None = None,
     model_name: str | None = None,
     batch_size: int | None = None,
+    device: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     top_k: int | None = None,
@@ -172,6 +188,8 @@ def with_overrides(
         out = replace(out, embedding=replace(out.embedding, model_name=model_name))
     if batch_size is not None:
         out = replace(out, embedding=replace(out.embedding, batch_size=batch_size))
+    if device is not None:
+        out = replace(out, embedding=replace(out.embedding, device=_check_device(device)))
     if chunk_size is not None:
         if chunk_size <= 0:
             raise SystemExit(f"error: chunk_size must be > 0, got {chunk_size}")

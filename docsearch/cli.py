@@ -17,6 +17,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", help="Override database path")
     parser.add_argument("--model", help="Override embedding model name")
     parser.add_argument("--batch-size", type=int, help="Override embedding batch size")
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        help="Device for models (default: auto, GPU if available)",
+    )
     parser.add_argument("--chunk-size", type=int, help="Override chunk size")
     parser.add_argument("--chunk-overlap", type=int, help="Override chunk overlap")
     parser.add_argument(
@@ -194,6 +199,7 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
 
     totals = db.stats()
     rows = db.list_documents_with_chunk_counts()
+    index_model = db.get_meta().get("model_name")
 
     documents = [
         DocumentInfo(
@@ -216,7 +222,7 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
                     "db_size_bytes": db_size,
                     "total_documents": totals["documents"],
                     "total_chunks": totals["chunks"],
-                    "model": cfg.embedding.model_name,
+                    "model": index_model or cfg.embedding.model_name,
                     "chunk_size": cfg.chunking.chunk_size,
                     "chunk_overlap": cfg.chunking.chunk_overlap,
                     "documents": [
@@ -244,6 +250,7 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
                 total_documents=totals["documents"],
                 total_chunks=totals["chunks"],
                 documents=documents,
+                index_model=index_model,
             )
         )
 
@@ -305,6 +312,7 @@ def main() -> None:
         db_path=args.db,
         model_name=args.model,
         batch_size=args.batch_size,
+        device=args.device,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
         top_k=getattr(args, "top_k", None),
@@ -315,7 +323,9 @@ def main() -> None:
     output_fmt = args.output
     update_model = args.update_model
 
-    from docsearch.database import Database
+    import sys
+
+    from docsearch.database import Database, IndexMeta, IndexMismatchError
 
     embedder = None
     vector_dim = 384  # default; overridden below for commands that load the model
@@ -326,12 +336,28 @@ def main() -> None:
             model_name=cfg.embedding.model_name,
             cache_dir=cfg.embedding.model_cache_dir,
             update=update_model,
+            device=cfg.embedding.device,
         )
         vector_dim = embedder.dim
 
     db = Database(cfg.storage.db_path, vector_dim=vector_dim)
 
     try:
+        if embedder is not None:
+            from docsearch.chunking import CHUNKER_VERSION
+
+            try:
+                db.ensure_compatible(
+                    IndexMeta(
+                        model_name=embedder.model_name,
+                        dim=embedder.dim,
+                        chunker_version=CHUNKER_VERSION,
+                    )
+                )
+            except IndexMismatchError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(1)
+
         if created and output_fmt == "pretty":
             from docsearch.display import dim
 
