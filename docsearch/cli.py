@@ -59,6 +59,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit search to this document (repeat for multiple); accepts file path or SHA-256 hash",
     )
 
+    p_eval = sub.add_parser("eval", help="Score search quality against an eval file")
+    p_eval.add_argument("eval_file", help="TOML file with [[case]] query/expect entries")
+
     sub.add_parser("status", help="Show index stats and document listing")
     sub.add_parser("sync", help="Remove index entries for PDFs that no longer exist on disk")
 
@@ -73,15 +76,15 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _cmd_index(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
+def _cmd_index(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
     from docsearch.indexer import index_path
 
     stats = index_path(
         path=args.path,
         db=db,
         cfg=cfg,
+        embedder=embedder,
         reindex=args.reindex,
-        update_model=update_model,
     )
 
     if output_fmt == "json":
@@ -92,7 +95,7 @@ def _cmd_index(args: argparse.Namespace, cfg, db, output_fmt: str, update_model:
         print(render_index_stats(stats))
 
 
-def _cmd_search(args: argparse.Namespace, cfg, db, output_fmt: str, update_model: bool) -> None:
+def _cmd_search(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
     import sys
 
     from docsearch.search import search_query
@@ -102,9 +105,9 @@ def _cmd_search(args: argparse.Namespace, cfg, db, output_fmt: str, update_model
             query=args.query,
             db=db,
             cfg=cfg,
+            embedder=embedder,
             top_k=args.top_k,
             score_threshold=args.score_threshold,
-            update_model=update_model,
             document_keys=args.docs,
         )
     except ValueError as exc:
@@ -137,6 +140,47 @@ def _cmd_search(args: argparse.Namespace, cfg, db, output_fmt: str, update_model
         from docsearch.display import render_search_results
 
         print(render_search_results(args.query, results))
+
+
+def _cmd_eval(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
+    import sys
+
+    from docsearch.evaluate import load_cases, run_eval
+
+    try:
+        cases = load_cases(Path(args.eval_file))
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    report = run_eval(cases, db=db, cfg=cfg, embedder=embedder)
+
+    if output_fmt == "json":
+        print(
+            json.dumps(
+                {
+                    "model": cfg.embedding.model_name,
+                    "cases": len(report.cases),
+                    "recall_at_1": round(report.recall_at_1, 4),
+                    "recall_at_5": round(report.recall_at_5, 4),
+                    "mrr": round(report.mrr, 4),
+                    "results": [
+                        {
+                            "query": c.case.query,
+                            "expect": {"file": c.case.file, "page": c.case.page},
+                            "rank": c.rank,
+                            "top": [{"file_name": f, "page": p} for f, p in c.top],
+                        }
+                        for c in report.cases
+                    ],
+                },
+                indent=2,
+            )
+        )
+    else:
+        from docsearch.display import render_eval
+
+        print(render_eval(report))
 
 
 def _cmd_status(cfg, db, output_fmt: str) -> None:
@@ -273,16 +317,17 @@ def main() -> None:
 
     from docsearch.database import Database
 
+    embedder = None
     vector_dim = 384  # default; overridden below for commands that load the model
-    if args.command in ("index", "search"):
+    if args.command in ("index", "search", "eval"):
         from docsearch.embedding import load_embedder
 
-        _model = load_embedder(
+        embedder = load_embedder(
             model_name=cfg.embedding.model_name,
             cache_dir=cfg.embedding.model_cache_dir,
             update=update_model,
         )
-        vector_dim = _model.get_sentence_embedding_dimension()
+        vector_dim = embedder.dim
 
     db = Database(cfg.storage.db_path, vector_dim=vector_dim)
 
@@ -293,9 +338,11 @@ def main() -> None:
             print(dim(f"Created default config at {Path(args.config).expanduser()}"))
 
         if args.command == "index":
-            _cmd_index(args, cfg, db, output_fmt, update_model)
+            _cmd_index(args, cfg, db, embedder, output_fmt)
         elif args.command == "search":
-            _cmd_search(args, cfg, db, output_fmt, update_model)
+            _cmd_search(args, cfg, db, embedder, output_fmt)
+        elif args.command == "eval":
+            _cmd_eval(args, cfg, db, embedder, output_fmt)
         elif args.command == "status":
             _cmd_status(cfg, db, output_fmt)
         elif args.command == "sync":

@@ -1,0 +1,21 @@
+# docsearch eval file
+# Run: docsearch eval eval.toml
+#
+# Each case is one query plus the place where the right answer lives.
+# "file" matches the PDF file name (or full path). "page" is optional;
+# leave it out to accept any page of that file.
+#
+# Aim for ~30 cases: EN and PT queries, keyword queries (exact terms,
+# IDs, acronyms) and natural-language questions.
+
+[[case]]
+query = "qual o prazo de rescisão do contrato?"
+expect = { file = "contrato-2024.pdf", page = 7 }
+
+[[case]]
+query = "ISO 27001 A.8.2"
+expect = { file = "security-policy.pdf", page = 12 }
+
+[[case]]
+query = "how are refunds handled after cancellation"
+expect = { file = "terms-of-service.pdf" }

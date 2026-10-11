@@ -10,7 +10,7 @@ import pymupdf
 from docsearch.chunking import chunk_text
 from docsearch.config import AppConfig
 from docsearch.database import Database
-from docsearch.embedding import load_embedder
+from docsearch.embedding import Embedder
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +74,8 @@ def index_path(
     path: str,
     db: Database,
     cfg: AppConfig,
+    embedder: Embedder,
     reindex: bool = False,
-    update_model: bool = False,
 ) -> IndexStats:
     base = Path(path).expanduser().resolve()
     if base.is_file():
@@ -86,12 +86,6 @@ def index_path(
         pdfs = sorted(base.rglob("*.pdf"))
     else:
         raise ValueError(f"Path does not exist: {base}")
-    model = load_embedder(
-        model_name=cfg.embedding.model_name,
-        cache_dir=cfg.embedding.model_cache_dir,
-        update=update_model,
-    )
-
     stats = IndexStats(scanned=len(pdfs))
 
     for pdf_path in pdfs:
@@ -136,14 +130,7 @@ def index_path(
                 continue
 
             texts = [c.text for c in page_chunks]
-            vectors = model.encode(
-                texts,
-                batch_size=cfg.embedding.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            vector_rows = vectors.tolist()
+            vector_rows = embedder.encode_passages(texts, batch_size=cfg.embedding.batch_size)
 
             doc_id = db.insert_document(
                 file_path=str(pdf_path),
@@ -156,9 +143,13 @@ def index_path(
             inserted_chunks = db.insert_chunks(doc_id, rows)
 
             if replaced:
-                stats = replace(stats, reindexed=stats.reindexed + 1, chunks=stats.chunks + inserted_chunks)
+                stats = replace(
+                    stats, reindexed=stats.reindexed + 1, chunks=stats.chunks + inserted_chunks
+                )
             else:
-                stats = replace(stats, indexed=stats.indexed + 1, chunks=stats.chunks + inserted_chunks)
+                stats = replace(
+                    stats, indexed=stats.indexed + 1, chunks=stats.chunks + inserted_chunks
+                )
 
         except Exception as exc:
             logger.warning("Skipping %s: %s", pdf_path, exc)

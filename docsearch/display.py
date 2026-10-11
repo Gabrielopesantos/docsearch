@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from docsearch.config import AppConfig
+    from docsearch.evaluate import EvalReport
     from docsearch.indexer import IndexStats
 
 
@@ -229,5 +230,30 @@ def render_remove(removed: int) -> str:
         lines.append(f"  {yellow('No matching document found.')}")
     else:
         lines.append(f"  Removed {bold_white(str(removed))} document(s).")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_eval(report: EvalReport) -> str:
+    lines: list[str] = []
+    lines.append("")
+    for c in report.cases:
+        expect = c.case.file if c.case.page is None else f"{c.case.file} p.{c.case.page}"
+        if c.rank is None:
+            status = red("miss")
+        elif c.rank == 1:
+            status = green("#1  ")
+        else:
+            status = yellow(f"#{c.rank:<3}")
+        lines.append(f"  {status} {bold_white(c.case.query)}  {dim('want ' + expect)}")
+        if c.rank != 1 and c.top:
+            got = ", ".join(f"{f} p.{p}" for f, p in c.top[:3])
+            lines.append(f"       {dim('got ' + got)}")
+    lines.append("")
+    label_w = 10
+    lines.append(f"  {'Cases':<{label_w}} {len(report.cases)}")
+    lines.append(f"  {'Recall@1':<{label_w}} {_score_color(report.recall_at_1)}")
+    lines.append(f"  {'Recall@5':<{label_w}} {_score_color(report.recall_at_5)}")
+    lines.append(f"  {'MRR':<{label_w}} {_score_color(report.mrr)}")
     lines.append("")
     return "\n".join(lines)
