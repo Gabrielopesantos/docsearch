@@ -14,10 +14,11 @@ batch_size = 64
 device = "auto"
 
 [chunking]
-# Characters per chunk
-chunk_size = 500
-# Overlap characters between chunks
-chunk_overlap = 100
+# Maximum tokens per chunk. Chunks hold whole sentences and never cross a page.
+# Keep below the model's input limit (512 for e5-small).
+max_tokens = 250
+# Sentences repeated from the previous chunk
+overlap_sentences = 1
 
 [search]
 # Number of results returned by default

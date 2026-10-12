@@ -22,8 +22,10 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["auto", "cpu", "cuda"],
         help="Device for models (default: auto, GPU if available)",
     )
-    parser.add_argument("--chunk-size", type=int, help="Override chunk size")
-    parser.add_argument("--chunk-overlap", type=int, help="Override chunk overlap")
+    parser.add_argument("--max-tokens", type=int, help="Override maximum tokens per chunk")
+    parser.add_argument(
+        "--overlap-sentences", type=int, help="Override sentences repeated between chunks"
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -223,8 +225,8 @@ def _cmd_status(cfg, db, output_fmt: str) -> None:
                     "total_documents": totals["documents"],
                     "total_chunks": totals["chunks"],
                     "model": index_model or cfg.embedding.model_name,
-                    "chunk_size": cfg.chunking.chunk_size,
-                    "chunk_overlap": cfg.chunking.chunk_overlap,
+                    "max_tokens": cfg.chunking.max_tokens,
+                    "overlap_sentences": cfg.chunking.overlap_sentences,
                     "documents": [
                         {
                             "file_name": d.file_name,
@@ -313,8 +315,8 @@ def main() -> None:
         model_name=args.model,
         batch_size=args.batch_size,
         device=args.device,
-        chunk_size=args.chunk_size,
-        chunk_overlap=args.chunk_overlap,
+        max_tokens=args.max_tokens,
+        overlap_sentences=args.overlap_sentences,
         top_k=getattr(args, "top_k", None),
         score_threshold=getattr(args, "score_threshold", None),
         score_threshold_set=getattr(args, "score_threshold", None) is not None,

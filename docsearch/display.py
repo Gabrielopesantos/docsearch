@@ -170,8 +170,8 @@ def render_status(
             f" {dim('(search will refuse; use a new --db)')}"
         )
     lines.append(
-        f"  {'Chunk size':<{label_w}} {cfg.chunking.chunk_size} chars "
-        f"{dim('(' + str(cfg.chunking.chunk_overlap) + ' overlap)')}"
+        f"  {'Chunk size':<{label_w}} {cfg.chunking.max_tokens} tokens "
+        f"{dim('(' + str(cfg.chunking.overlap_sentences) + ' sentence overlap)')}"
     )
     lines.append(f"  {'Config':<{label_w}} {dim(str(Path('~/.config/docsearch/config.toml')))}")
     lines.append("")
@@ -211,6 +211,11 @@ def render_index_stats(stats: IndexStats) -> str:
     if stats.reindexed > 0:
         lines.append(f"  {'Re-indexed':<{label_w}} {yellow(str(stats.reindexed))}")
     lines.append(f"  {'Skipped':<{label_w}} {dim(str(stats.skipped))}")
+    if stats.no_text > 0:
+        lines.append(
+            f"  {'No text':<{label_w}} {yellow(str(stats.no_text))} "
+            f"{dim('(scanned? run ocrmypdf first)')}"
+        )
     lines.append(f"  {'Chunks':<{label_w}} {stats.chunks}")
     lines.append("")
     return "\n".join(lines)

@@ -20,8 +20,8 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class ChunkingConfig:
-    chunk_size: int = 500
-    chunk_overlap: int = 100
+    max_tokens: int = 250
+    overlap_sentences: int = 1
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,11 @@ batch_size = 64
 device = "auto"
 
 [chunking]
-# Characters per chunk
-chunk_size = 500
-# Overlap characters between chunks
-chunk_overlap = 100
+# Maximum tokens per chunk. Chunks hold whole sentences and never cross a page.
+# Keep below the model's input limit (512 for e5-small).
+max_tokens = 250
+# Sentences repeated from the previous chunk
+overlap_sentences = 1
 
 [search]
 # Number of results returned by default
@@ -88,6 +89,18 @@ _DEVICES = ("auto", "cpu", "cuda")
 def _check_device(value: str) -> str:
     if value not in _DEVICES:
         raise SystemExit(f"error: device must be one of {', '.join(_DEVICES)}, got {value!r}")
+    return value
+
+
+def _check_max_tokens(value: int) -> int:
+    if value <= 0:
+        raise SystemExit(f"error: max_tokens must be > 0, got {value}")
+    return value
+
+
+def _check_overlap(value: int) -> int:
+    if value < 0:
+        raise SystemExit(f"error: overlap_sentences must be >= 0, got {value}")
     return value
 
 
@@ -128,19 +141,17 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, boo
 
     chunking = data.get("chunking", {})
     if chunking:
-        chunk_size = int(chunking.get("chunk_size", cfg.chunking.chunk_size))
-        chunk_overlap = int(chunking.get("chunk_overlap", cfg.chunking.chunk_overlap))
-        if chunk_size <= 0:
-            raise SystemExit(f"error: chunk_size must be > 0, got {chunk_size}")
-        if chunk_overlap < 0:
-            raise SystemExit(f"error: chunk_overlap must be >= 0, got {chunk_overlap}")
-        if chunk_overlap >= chunk_size:
-            raise SystemExit(
-                f"error: chunk_overlap ({chunk_overlap}) must be < chunk_size ({chunk_size})"
-            )
         cfg = replace(
             cfg,
-            chunking=replace(cfg.chunking, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
+            chunking=replace(
+                cfg.chunking,
+                max_tokens=_check_max_tokens(
+                    int(chunking.get("max_tokens", cfg.chunking.max_tokens))
+                ),
+                overlap_sentences=_check_overlap(
+                    int(chunking.get("overlap_sentences", cfg.chunking.overlap_sentences))
+                ),
+            ),
         )
 
     search = data.get("search", {})
@@ -175,8 +186,8 @@ def with_overrides(
     model_name: str | None = None,
     batch_size: int | None = None,
     device: str | None = None,
-    chunk_size: int | None = None,
-    chunk_overlap: int | None = None,
+    max_tokens: int | None = None,
+    overlap_sentences: int | None = None,
     top_k: int | None = None,
     score_threshold: float | None = None,
     score_threshold_set: bool = False,
@@ -190,20 +201,12 @@ def with_overrides(
         out = replace(out, embedding=replace(out.embedding, batch_size=batch_size))
     if device is not None:
         out = replace(out, embedding=replace(out.embedding, device=_check_device(device)))
-    if chunk_size is not None:
-        if chunk_size <= 0:
-            raise SystemExit(f"error: chunk_size must be > 0, got {chunk_size}")
-        out = replace(out, chunking=replace(out.chunking, chunk_size=chunk_size))
-    if chunk_overlap is not None:
-        if chunk_overlap < 0:
-            raise SystemExit(f"error: chunk_overlap must be >= 0, got {chunk_overlap}")
-        out = replace(out, chunking=replace(out.chunking, chunk_overlap=chunk_overlap))
-    # Cross-field validation after both may have been applied
-    final_size = out.chunking.chunk_size
-    final_overlap = out.chunking.chunk_overlap
-    if final_overlap >= final_size:
-        raise SystemExit(
-            f"error: chunk_overlap ({final_overlap}) must be < chunk_size ({final_size})"
+    if max_tokens is not None:
+        out = replace(out, chunking=replace(out.chunking, max_tokens=_check_max_tokens(max_tokens)))
+    if overlap_sentences is not None:
+        out = replace(
+            out,
+            chunking=replace(out.chunking, overlap_sentences=_check_overlap(overlap_sentences)),
         )
     if top_k is not None:
         out = replace(out, search=replace(out.search, top_k=top_k))
