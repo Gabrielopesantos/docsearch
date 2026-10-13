@@ -8,7 +8,7 @@ from pathlib import Path
 import libsql
 
 # Bump when the table layout changes in a way old indexes cannot be read.
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 class IndexMismatchError(ValueError):
@@ -42,13 +42,13 @@ class DocumentRecord:
 
 
 @dataclass(frozen=True)
-class SearchResult:
+class ChunkRow:
+    id: int
     file_path: str
     file_name: str
     page_number: int
     chunk_index: int
     content: str
-    cosine_distance: float
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,34 @@ class Database:
             ON chunks (libsql_vector_idx(embedding))
             """
         )
+        # Keyword index over chunk text. remove_diacritics folds accents, so
+        # "servico" matches "serviço". Triggers keep it in sync with chunks,
+        # including rows removed by ON DELETE CASCADE.
+        self.conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                content,
+                content='chunks',
+                content_rowid='id',
+                tokenize='unicode61 remove_diacritics 2'
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts (rowid, content) VALUES (new.id, new.content);
+            END
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+                INSERT INTO chunks_fts (chunks_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+            END
+            """
+        )
 
     def get_meta(self) -> dict[str, str]:
         rows = self.conn.execute("SELECT key, value FROM meta").fetchall()
@@ -167,6 +195,7 @@ class Database:
 
         # Empty index: rebuild the chunk tables for this vector size and record settings.
         self.vector_dim = expected.dim
+        self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
         self.conn.execute("DROP INDEX IF EXISTS idx_chunks_vector")
         self.conn.execute("DROP TABLE IF EXISTS chunks")
         self._create_chunk_tables()
@@ -298,62 +327,95 @@ class Database:
             raise ValueError(f"unknown document key(s): {keys_str}")
         return ids
 
-    def search_chunks(
+    @staticmethod
+    def _doc_filter(document_ids: list[int] | None) -> tuple[str, list[int]]:
+        if document_ids is None:
+            return "", []
+        placeholders = ",".join("?" for _ in document_ids)
+        return f"AND c.document_id IN ({placeholders})", list(document_ids)
+
+    def vector_candidates(
         self,
         query_embedding: list[float],
-        top_k: int,
+        limit: int,
         document_ids: list[int] | None = None,
-    ) -> list[SearchResult]:
+    ) -> list[int]:
+        """Return chunk ids nearest to the query vector, best first.
+
+        Without a document filter this uses the approximate vector index. With a
+        filter it scans only those documents' chunks, which is exact and cannot
+        miss hits the way post-filtering a global top-k can.
+        """
         query_json = json.dumps(query_embedding)
         if document_ids is None:
             rows = self.conn.execute(
                 """
-                SELECT
-                    d.file_path,
-                    d.file_name,
-                    c.page_number,
-                    c.chunk_index,
-                    c.content,
-                    vector_distance_cos(c.embedding, vector32(?)) AS cosine_distance
+                SELECT c.id
                 FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
                 JOIN chunks c ON c.rowid = vt.id
-                JOIN documents d ON d.id = c.document_id
-                ORDER BY cosine_distance ASC
+                ORDER BY vector_distance_cos(c.embedding, vector32(?)) ASC
                 """,
-                (query_json, query_json, top_k),
+                (query_json, limit, query_json),
             ).fetchall()
         else:
-            vector_top_k = max(top_k * 10, 200)
-            placeholders = ",".join("?" for _ in document_ids)
+            where, params = self._doc_filter(document_ids)
             rows = self.conn.execute(
                 f"""
-                SELECT
-                    d.file_path,
-                    d.file_name,
-                    c.page_number,
-                    c.chunk_index,
-                    c.content,
-                    vector_distance_cos(c.embedding, vector32(?)) AS cosine_distance
-                FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
-                JOIN chunks c ON c.rowid = vt.id
-                JOIN documents d ON d.id = c.document_id
-                WHERE c.document_id IN ({placeholders})
-                ORDER BY cosine_distance ASC
+                SELECT c.id
+                FROM chunks c
+                WHERE 1 = 1 {where}
+                ORDER BY vector_distance_cos(c.embedding, vector32(?)) ASC
                 LIMIT ?
                 """,
-                (query_json, query_json, vector_top_k, *document_ids, top_k),
+                (*params, query_json, limit),
             ).fetchall()
-        return [
-            SearchResult(
-                file_path=str(row[0]),
-                file_name=str(row[1]),
-                page_number=int(row[2]),
-                chunk_index=int(row[3]),
-                content=str(row[4]),
-                cosine_distance=float(row[5]),
+        return [int(r[0]) for r in rows]
+
+    def keyword_candidates(
+        self,
+        match_expr: str,
+        limit: int,
+        document_ids: list[int] | None = None,
+    ) -> list[int]:
+        """Return chunk ids that match an FTS5 expression, best bm25 first."""
+        where, params = self._doc_filter(document_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT c.id
+            FROM chunks_fts f
+            JOIN chunks c ON c.id = f.rowid
+            WHERE chunks_fts MATCH ? {where}
+            ORDER BY f.rank
+            LIMIT ?
+            """,
+            (match_expr, *params, limit),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
+
+    def get_chunks(self, chunk_ids: list[int]) -> dict[int, ChunkRow]:
+        if not chunk_ids:
+            return {}
+        placeholders = ",".join("?" for _ in chunk_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT c.id, d.file_path, d.file_name, c.page_number, c.chunk_index, c.content
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE c.id IN ({placeholders})
+            """,
+            chunk_ids,
+        ).fetchall()
+        return {
+            int(r[0]): ChunkRow(
+                id=int(r[0]),
+                file_path=str(r[1]),
+                file_name=str(r[2]),
+                page_number=int(r[3]),
+                chunk_index=int(r[4]),
+                content=str(r[5]),
             )
-            for row in rows
-        ]
+            for r in rows
+        }
 
     def list_all_documents(self) -> list[DocumentRecord]:
         rows = self.conn.execute(
