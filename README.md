@@ -1,6 +1,6 @@
 # docsearch
 
-**Semantic search over local documents using embeddings**  
+**Hybrid keyword + semantic search over local documents**  
 *Currently supports PDF files only*
 
 Index your documents locally, search them semantically with natural language queries, all without sending data to external services.
@@ -17,7 +17,7 @@ Index your documents locally, search them semantically with natural language que
 
 - `libsql` — local vector database
 - `pymupdf` — PDF text extraction  
-- `sentence-transformers` — local embedding model (downloads ~90MB model on first run)
+- `sentence-transformers` — local embedding and reranker models (~470MB + ~470MB on first run)
 - `torch` + dependencies — pulled in by sentence-transformers (~900MB)
 
 ## Installation
@@ -70,6 +70,23 @@ docsearch status
 docsearch sync
 ```
 
+## How search works
+
+```
+index:  PDF ─► text per page ─► strip repeated headers/footers
+            ─► sentence chunks (≤250 tokens, never cross a page)
+            ─► e5 embeddings + FTS5 keyword index
+
+search: query ─┬─► FTS5 bm25 top 50 ───┐
+               │                        ├─► RRF merge ─► cross-encoder rerank ─► top N
+               └─► vector top 50 ──────┘
+```
+
+- **Keyword search** finds exact terms, IDs and numbers ("A.8.2", "SEC-4471").
+  Accents are folded, so "servico" matches "serviço".
+- **Vector search** finds passages with the same meaning but different words.
+- **The reranker** reads query and passage together and decides the final order.
+
 ## Configuration
 
 On first run, a default config file is created at:
@@ -86,11 +103,15 @@ See [`config.toml.example`](./config.toml.example) for the full template with co
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `embedding.model_name` | `all-MiniLM-L6-v2` | HuggingFace model identifier |
+| `embedding.model_name` | `intfloat/multilingual-e5-small` | HuggingFace model identifier |
 | `embedding.batch_size` | `64` | Chunks embedded per batch |
-| `chunking.chunk_size` | `500` | Characters per chunk |
-| `chunking.chunk_overlap` | `100` | Overlap between chunks |
+| `embedding.device` | `auto` | `auto`, `cpu` or `cuda` (speed only) |
+| `chunking.max_tokens` | `250` | Maximum tokens per chunk |
+| `chunking.overlap_sentences` | `1` | Sentences repeated between chunks |
 | `search.top_k` | `5` | Default search result count |
+| `search.score_threshold` | unset | Minimum score in 0..1 |
+| `rerank.enabled` | `true` | Rerank with a cross-encoder |
+| `rerank.model_name` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | Cross-encoder model |
 | `storage.db_path` | `~/.docsearch/index.db` | libSQL database location |
 
 ## Usage
@@ -121,8 +142,11 @@ docsearch search "neural networks"
 # Customize result count
 docsearch search "machine learning" -n 10
 
-# Filter by minimum similarity score (0.0 - 1.0)
-docsearch search "embeddings" --score-threshold 0.7
+# Filter by minimum score (0.0 - 1.0; reranker score when rerank is on)
+docsearch search "embeddings" --score-threshold 0.3
+
+# Skip the reranker (faster, less precise)
+docsearch search --no-rerank "embeddings"
 
 # Limit search to a specific document (by path or hash prefix)
 docsearch search --doc /path/to/paper.pdf "query"
@@ -134,6 +158,21 @@ docsearch search --doc <hash1> --doc <hash2> "query"
 # JSON output for piping to other tools
 docsearch -o json search "query" | jq '.results[0]'
 ```
+
+### Measure search quality
+
+Write an eval file with queries and the page where the answer lives
+(see [`eval.example.toml`](./eval.example.toml)), then:
+
+```bash
+docsearch eval eval.toml
+docsearch eval --no-rerank eval.toml   # compare without the reranker
+docsearch -o json eval eval.toml
+```
+
+It prints recall@1, recall@5 and MRR (mean of 1/rank of the right page), and
+lists the queries that missed. Run it after any change to model, chunking or
+settings to see if results got better or worse.
 
 ### Status and maintenance
 
@@ -165,17 +204,43 @@ docsearch -o json search "query" | jq .
 docsearch -o pretty status
 ```
 
-## Embedding model
+## Models
 
-The default model is **`all-MiniLM-L6-v2`** from sentence-transformers:
-- 384 dimensions
-- ~90MB download
-- Fast inference on CPU
-- Good quality for general-purpose semantic search
+The default **embedding model** is **`intfloat/multilingual-e5-small`**:
+- Multilingual (Portuguese, English and ~100 other languages)
+- 384 dimensions, ~470MB download, fast on CPU
+
+The default **reranker** is **`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`**
+(multilingual, ~470MB). It adds a fraction of a second per query on CPU.
+
+With a GPU, stronger models are practical:
+
+```toml
+[embedding]
+model_name = "BAAI/bge-m3"
+device = "cuda"
+
+[rerank]
+model_name = "BAAI/bge-reranker-v2-m3"
+```
+
+The index remembers which embedding model built it. If the configured model
+differs, `index`, `search` and `eval` refuse to run instead of mixing vectors.
+To change models, use a new `--db` or delete the index file and index again.
+The device does not affect results, only speed.
+
+### Scanned PDFs
+
+PDFs without a text layer show up as "No text" when indexing. Run OCR first,
+for example with [`ocrmypdf`](https://ocrmypdf.readthedocs.io/):
+
+```bash
+nix run nixpkgs#ocrmypdf -- scanned.pdf scanned-ocr.pdf
+```
 
 ### Model download behavior
 
-- **First run:** Model downloads from HuggingFace Hub (~90MB + ~900MB PyTorch deps)
+- **First run:** Models download from HuggingFace Hub (~1GB + ~900MB PyTorch deps)
 - **Subsequent runs:** Fully offline, no network requests
 - **Force update:** Use `--update-model` flag to re-download
 
