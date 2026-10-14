@@ -23,8 +23,15 @@ overlap_sentences = 1
 [search]
 # Number of results returned by default
 top_k = 5
-# Optional cosine similarity threshold in [0,1], or omit
-# score_threshold = 0.35
+# Optional minimum score in [0,1], or omit. With rerank enabled this is the
+# reranker score; without it, the fused rank score.
+# score_threshold = 0.2
+
+[rerank]
+# Cross-encoder that re-scores the top candidates. Scores are 0..1.
+# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-reranker-v2-m3" is stronger.
+enabled = true
+model_name = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
 [storage]
 # Local libSQL database file path

@@ -31,6 +31,12 @@ class SearchConfig:
 
 
 @dataclass(frozen=True)
+class RerankConfig:
+    enabled: bool = True
+    model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+
+
+@dataclass(frozen=True)
 class StorageConfig:
     db_path: str = str(DEFAULT_DB_PATH)
 
@@ -40,6 +46,7 @@ class AppConfig:
     embedding: EmbeddingConfig = EmbeddingConfig()
     chunking: ChunkingConfig = ChunkingConfig()
     search: SearchConfig = SearchConfig()
+    rerank: RerankConfig = RerankConfig()
     storage: StorageConfig = StorageConfig()
 
 
@@ -70,8 +77,15 @@ overlap_sentences = 1
 [search]
 # Number of results returned by default
 top_k = 5
-# Optional cosine similarity threshold in [0,1], or omit
-# score_threshold = 0.35
+# Optional minimum score in [0,1], or omit. With rerank enabled this is the
+# reranker score; without it, the fused rank score.
+# score_threshold = 0.2
+
+[rerank]
+# Cross-encoder that re-scores the top candidates. Scores are 0..1.
+# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-reranker-v2-m3" is stronger.
+enabled = true
+model_name = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
 [storage]
 # Local libSQL database file path
@@ -167,6 +181,17 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, boo
             ),
         )
 
+    rerank = data.get("rerank", {})
+    if rerank:
+        cfg = replace(
+            cfg,
+            rerank=replace(
+                cfg.rerank,
+                enabled=bool(rerank.get("enabled", cfg.rerank.enabled)),
+                model_name=rerank.get("model_name", cfg.rerank.model_name),
+            ),
+        )
+
     storage = data.get("storage", {})
     if storage:
         cfg = replace(
@@ -191,6 +216,7 @@ def with_overrides(
     top_k: int | None = None,
     score_threshold: float | None = None,
     score_threshold_set: bool = False,
+    rerank: bool | None = None,
 ) -> AppConfig:
     out = cfg
     if db_path is not None:
@@ -210,6 +236,8 @@ def with_overrides(
         )
     if top_k is not None:
         out = replace(out, search=replace(out.search, top_k=top_k))
+    if rerank is not None:
+        out = replace(out, rerank=replace(out.rerank, enabled=rerank))
     if score_threshold_set:
         out = replace(out, search=replace(out.search, score_threshold=score_threshold))
     return out

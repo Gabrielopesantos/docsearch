@@ -8,6 +8,7 @@ from docsearch.config import AppConfig
 from docsearch.database import Database
 from docsearch.display import RenderedResult
 from docsearch.embedding import Embedder
+from docsearch.rerank import Reranker
 from docsearch.search import search_query
 
 # Results fetched per query. MRR counts a hit only inside this window.
@@ -68,6 +69,7 @@ def run_eval(
     db: Database,
     cfg: AppConfig,
     embedder: Embedder,
+    reranker: Reranker | None = None,
 ) -> EvalReport:
     out: list[CaseResult] = []
     for case in cases:
@@ -76,6 +78,7 @@ def run_eval(
             db=db,
             cfg=cfg,
             embedder=embedder,
+            reranker=reranker,
             top_k=FETCH_K,
             score_threshold=None,
         )

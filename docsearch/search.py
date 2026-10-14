@@ -7,6 +7,7 @@ from docsearch.config import AppConfig
 from docsearch.database import Database
 from docsearch.display import RenderedResult
 from docsearch.embedding import Embedder
+from docsearch.rerank import Reranker
 
 # Candidates taken from each retriever before fusion.
 CANDIDATES = 50
@@ -58,6 +59,7 @@ def search_query(
     db: Database,
     cfg: AppConfig,
     embedder: Embedder,
+    reranker: Reranker | None = None,
     top_k: int | None = None,
     score_threshold: float | None = None,
     document_keys: list[str] | None = None,
@@ -74,7 +76,19 @@ def search_query(
         db.keyword_candidates(match_expr, pool, document_ids=doc_ids) if match_expr else []
     )
 
-    fused = rrf_fuse([vector_ids, keyword_ids])[:requested_k]
+    fused = rrf_fuse([vector_ids, keyword_ids])
+    if reranker is None:
+        fused = fused[:requested_k]
+    else:
+        # Re-score the fused pool with the cross-encoder; its order replaces RRF.
+        fused = fused[:pool]
+        pool_chunks = db.get_chunks([chunk_id for chunk_id, _ in fused])
+        scores = reranker.score(query, [pool_chunks[chunk_id].content for chunk_id, _ in fused])
+        fused = sorted(
+            ((chunk_id, s) for (chunk_id, _), s in zip(fused, scores, strict=True)),
+            key=lambda pair: pair[1],
+            reverse=True,
+        )[:requested_k]
     chunks = db.get_chunks([chunk_id for chunk_id, _ in fused])
 
     out: list[RenderedResult] = []

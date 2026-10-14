@@ -55,7 +55,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--score-threshold",
         type=float,
-        help="Filter by minimum similarity score",
+        help="Filter by minimum score (0..1)",
+    )
+    p_search.add_argument(
+        "--no-rerank",
+        dest="rerank",
+        action="store_false",
+        default=None,
+        help="Skip the cross-encoder reranker (faster, less precise)",
     )
     p_search.add_argument(
         "--doc",
@@ -68,6 +75,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_eval = sub.add_parser("eval", help="Score search quality against an eval file")
     p_eval.add_argument("eval_file", help="TOML file with [[case]] query/expect entries")
+    p_eval.add_argument(
+        "--no-rerank",
+        dest="rerank",
+        action="store_false",
+        default=None,
+        help="Score without the cross-encoder reranker",
+    )
 
     sub.add_parser("status", help="Show index stats and document listing")
     sub.add_parser("sync", help="Remove index entries for PDFs that no longer exist on disk")
@@ -102,7 +116,7 @@ def _cmd_index(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> 
         print(render_index_stats(stats))
 
 
-def _cmd_search(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
+def _cmd_search(args: argparse.Namespace, cfg, db, embedder, reranker, output_fmt: str) -> None:
     import sys
 
     from docsearch.search import search_query
@@ -113,6 +127,7 @@ def _cmd_search(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) ->
             db=db,
             cfg=cfg,
             embedder=embedder,
+            reranker=reranker,
             top_k=args.top_k,
             score_threshold=args.score_threshold,
             document_keys=args.docs,
@@ -149,7 +164,7 @@ def _cmd_search(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) ->
         print(render_search_results(args.query, results))
 
 
-def _cmd_eval(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
+def _cmd_eval(args: argparse.Namespace, cfg, db, embedder, reranker, output_fmt: str) -> None:
     import sys
 
     from docsearch.evaluate import load_cases, run_eval
@@ -160,13 +175,14 @@ def _cmd_eval(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> N
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    report = run_eval(cases, db=db, cfg=cfg, embedder=embedder)
+    report = run_eval(cases, db=db, cfg=cfg, embedder=embedder, reranker=reranker)
 
     if output_fmt == "json":
         print(
             json.dumps(
                 {
                     "model": cfg.embedding.model_name,
+                    "reranker": cfg.rerank.model_name if reranker else None,
                     "cases": len(report.cases),
                     "recall_at_1": round(report.recall_at_1, 4),
                     "recall_at_5": round(report.recall_at_5, 4),
@@ -320,6 +336,7 @@ def main() -> None:
         top_k=getattr(args, "top_k", None),
         score_threshold=getattr(args, "score_threshold", None),
         score_threshold_set=getattr(args, "score_threshold", None) is not None,
+        rerank=getattr(args, "rerank", None),
     )
 
     output_fmt = args.output
@@ -341,6 +358,17 @@ def main() -> None:
             device=cfg.embedding.device,
         )
         vector_dim = embedder.dim
+
+    reranker = None
+    if args.command in ("search", "eval") and cfg.rerank.enabled:
+        from docsearch.rerank import load_reranker
+
+        reranker = load_reranker(
+            model_name=cfg.rerank.model_name,
+            cache_dir=cfg.embedding.model_cache_dir,
+            update=update_model,
+            device=cfg.embedding.device,
+        )
 
     db = Database(cfg.storage.db_path, vector_dim=vector_dim)
 
@@ -368,9 +396,9 @@ def main() -> None:
         if args.command == "index":
             _cmd_index(args, cfg, db, embedder, output_fmt)
         elif args.command == "search":
-            _cmd_search(args, cfg, db, embedder, output_fmt)
+            _cmd_search(args, cfg, db, embedder, reranker, output_fmt)
         elif args.command == "eval":
-            _cmd_eval(args, cfg, db, embedder, output_fmt)
+            _cmd_eval(args, cfg, db, embedder, reranker, output_fmt)
         elif args.command == "status":
             _cmd_status(cfg, db, output_fmt)
         elif args.command == "sync":
