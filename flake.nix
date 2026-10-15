@@ -20,7 +20,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            python312
+            python314
             uv
             ruff
             mupdf
