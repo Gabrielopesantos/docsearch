@@ -7,29 +7,9 @@ from pathlib import Path
 
 import libsql
 
-# Bump when the table layout changes in a way old indexes cannot be read.
-SCHEMA_VERSION = "3"
-
 
 class IndexMismatchError(ValueError):
-    """The index on disk was built with settings that differ from the config."""
-
-
-@dataclass(frozen=True)
-class IndexMeta:
-    """Settings that fix how an index was built. Vectors from different values do not mix."""
-
-    model_name: str
-    dim: int
-    chunker_version: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {
-            "model_name": self.model_name,
-            "dim": str(self.dim),
-            "chunker_version": self.chunker_version,
-            "schema_version": SCHEMA_VERSION,
-        }
+    """The index on disk was built with a different embedding model than the config."""
 
 
 @dataclass(frozen=True)
@@ -64,17 +44,29 @@ class DocumentSummary:
 
 
 class Database:
-    def __init__(self, db_path: str, vector_dim: int = 384) -> None:
+    """libSQL index of documents, chunks, vectors and keywords.
+
+    The first open with a model records its name and vector size in ``meta``
+    and creates the chunk tables for that size. Later opens with a model check
+    that it matches. Opening without a model (status, sync, remove) needs an
+    existing index.
+    """
+
+    def __init__(
+        self,
+        db_path: str,
+        model_name: str | None = None,
+        vector_dim: int | None = None,
+    ) -> None:
         self.db_path = str(Path(db_path).expanduser())
-        self.vector_dim = vector_dim
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = libsql.connect(self.db_path)
-        self.init_schema()
+        self.init_schema(model_name, vector_dim)
 
     def close(self) -> None:
         self.conn.close()
 
-    def init_schema(self) -> None:
+    def init_schema(self, model_name: str | None, vector_dim: int | None) -> None:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute(
             """
@@ -90,22 +82,41 @@ class Database:
         )
         self.conn.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_documents_file_hash
+            ON documents (file_hash)
+            """
+        )
+        self.conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
             """
         )
-        self._create_chunk_tables()
-        self.conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_documents_file_hash
-            ON documents (file_hash)
-            """
-        )
+
+        meta = self.get_meta()
+        if model_name is not None and vector_dim is not None:
+            if not meta:
+                meta = {"model_name": model_name, "dim": str(vector_dim)}
+                self.conn.executemany(
+                    "INSERT INTO meta (key, value) VALUES (?, ?)", list(meta.items())
+                )
+            elif meta["model_name"] != model_name:
+                raise IndexMismatchError(
+                    f"index at {self.db_path} was built with {meta['model_name']!r}, "
+                    f"config uses {model_name!r}.\nUse --db <new path> for a new index, "
+                    "or delete the index file and index again."
+                )
+        if meta:
+            self._create_chunk_tables(int(meta["dim"]))
         self.conn.commit()
 
-    def _create_chunk_tables(self) -> None:
+    def get_meta(self) -> dict[str, str]:
+        rows = self.conn.execute("SELECT key, value FROM meta").fetchall()
+        return {str(r[0]): str(r[1]) for r in rows}
+
+    def _create_chunk_tables(self, vector_dim: int) -> None:
         self.conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -114,7 +125,7 @@ class Database:
                 chunk_index INTEGER NOT NULL,
                 page_number INTEGER NOT NULL,
                 content TEXT NOT NULL,
-                embedding F32_BLOB({self.vector_dim}) NOT NULL
+                embedding F32_BLOB({vector_dim}) NOT NULL
             )
             """
         )
@@ -158,52 +169,6 @@ class Database:
             END
             """
         )
-
-    def get_meta(self) -> dict[str, str]:
-        rows = self.conn.execute("SELECT key, value FROM meta").fetchall()
-        return {str(r[0]): str(r[1]) for r in rows}
-
-    def ensure_compatible(self, expected: IndexMeta) -> None:
-        """Check that the index was built with the configured model and chunker.
-
-        An empty index is (re)initialised for the expected settings. A non-empty
-        index with different or missing metadata raises IndexMismatchError; data
-        is never deleted here.
-        """
-        stored = self.get_meta()
-        if stored:
-            diffs = [
-                f"{key}: index has {stored.get(key)!r}, config wants {value!r}"
-                for key, value in expected.as_dict().items()
-                if stored.get(key) != value
-            ]
-            if not diffs:
-                return
-            if self.stats()["documents"] > 0:
-                raise IndexMismatchError(
-                    f"index at {self.db_path} was built with other settings:\n  "
-                    + "\n  ".join(diffs)
-                    + "\nUse --db <new path> for a new index, or delete the index file "
-                    "and index again."
-                )
-        elif self.stats()["documents"] > 0:
-            raise IndexMismatchError(
-                f"index at {self.db_path} was built by an older docsearch version "
-                "and has no model metadata.\nUse --db <new path> for a new index, or "
-                "delete the index file and index again."
-            )
-
-        # Empty index: rebuild the chunk tables for this vector size and record settings.
-        self.vector_dim = expected.dim
-        self.conn.execute("DROP TABLE IF EXISTS chunks_fts")
-        self.conn.execute("DROP INDEX IF EXISTS idx_chunks_vector")
-        self.conn.execute("DROP TABLE IF EXISTS chunks")
-        self._create_chunk_tables()
-        self.conn.execute("DELETE FROM meta")
-        self.conn.executemany(
-            "INSERT INTO meta (key, value) VALUES (?, ?)", list(expected.as_dict().items())
-        )
-        self.conn.commit()
 
     def get_document_by_hash(self, file_hash: str) -> DocumentRecord | None:
         row = self.conn.execute(

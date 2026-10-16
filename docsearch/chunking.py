@@ -3,9 +3,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-# Stored in the index metadata. Bump when chunk boundaries change.
-CHUNKER_VERSION = "2"
-
 # Word split by a hyphen at a line end: "disponi-\nbilidade" -> "disponibilidade".
 _HYPHEN_BREAK = re.compile(r"(\w)-\n(?=[a-zà-ÿ])")
 # Sentence end: punctuation, whitespace, then something that can start a sentence.

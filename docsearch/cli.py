@@ -344,10 +344,9 @@ def main() -> None:
 
     import sys
 
-    from docsearch.database import Database, IndexMeta, IndexMismatchError
+    from docsearch.database import Database, IndexMismatchError
 
     embedder = None
-    vector_dim = 384  # default; overridden below for commands that load the model
     if args.command in ("index", "search", "eval"):
         from docsearch.embedding import load_embedder
 
@@ -357,7 +356,6 @@ def main() -> None:
             update=update_model,
             device=cfg.embedding.device,
         )
-        vector_dim = embedder.dim
 
     reranker = None
     if args.command in ("search", "eval") and cfg.rerank.enabled:
@@ -370,24 +368,25 @@ def main() -> None:
             device=cfg.embedding.device,
         )
 
-    db = Database(cfg.storage.db_path, vector_dim=vector_dim)
+    if embedder is not None:
+        try:
+            db = Database(
+                cfg.storage.db_path, model_name=embedder.model_name, vector_dim=embedder.dim
+            )
+        except IndexMismatchError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Commands without a model cannot create the chunk tables (vector size unknown).
+        if not Path(cfg.storage.db_path).exists():
+            print(
+                f"error: no index at {cfg.storage.db_path}; run 'docsearch index <path>' first",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        db = Database(cfg.storage.db_path)
 
     try:
-        if embedder is not None:
-            from docsearch.chunking import CHUNKER_VERSION
-
-            try:
-                db.ensure_compatible(
-                    IndexMeta(
-                        model_name=embedder.model_name,
-                        dim=embedder.dim,
-                        chunker_version=CHUNKER_VERSION,
-                    )
-                )
-            except IndexMismatchError as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                sys.exit(1)
-
         if created and output_fmt == "pretty":
             from docsearch.display import dim
 
