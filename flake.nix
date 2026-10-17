@@ -29,8 +29,10 @@
             stdenv.cc.cc.lib
           ];
 
+          # Prebuilt wheels (torch, numpy) load these from the system.
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
           ];
         };
       }
