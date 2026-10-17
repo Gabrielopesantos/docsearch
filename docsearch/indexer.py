@@ -123,18 +123,25 @@ def _index_file(
     cfg: AppConfig,
     embedder: Embedder,
     reindex: bool,
+    since: str | None,
     stats: IndexStats,
 ) -> tuple[IndexStats, str]:
-    """Index one PDF. Returns updated stats and a short note for progress output."""
-    replaced = False
+    """Index one PDF. Returns updated stats and a short note for progress output.
+
+    All database writes for the file happen in one transaction at the end, so an
+    interrupt leaves the file in its old state or its new state, never half done.
+    """
     file_hash = sha256_file(pdf_path)
-    for existing in (db.get_document_by_hash(file_hash), db.get_document_by_path(str(pdf_path))):
-        if existing is None:
-            continue
-        if not reindex:
-            return replace(stats, skipped=stats.skipped + 1), "skipped (already indexed)"
-        db.delete_document(existing.id)
-        replaced = True
+    existing = {
+        doc.id: doc
+        for doc in (db.get_document_by_hash(file_hash), db.get_document_by_path(str(pdf_path)))
+        if doc is not None
+    }
+    if existing and not reindex:
+        return replace(stats, skipped=stats.skipped + 1), "skipped (already indexed)"
+    # Resume: a file indexed at or after `since` is already done in an earlier run.
+    if since is not None and any(doc.indexed_at >= since for doc in existing.values()):
+        return replace(stats, skipped=stats.skipped + 1), f"skipped (indexed since {since})"
 
     page_chunks, page_count, title = extract_page_chunks(
         pdf_path,
@@ -142,31 +149,27 @@ def _index_file(
         overlap_sentences=cfg.chunking.overlap_sentences,
         count_tokens=embedder.count_tokens,
     )
-    if not page_chunks:
-        # Record it so the next run skips it, but report it apart.
-        db.insert_document(
-            file_path=str(pdf_path),
-            file_hash=file_hash,
-            file_name=pdf_path.name,
-            page_count=page_count,
-        )
-        return replace(stats, no_text=stats.no_text + 1), "no text (scanned? run ocrmypdf first)"
+    rows: list[tuple[int, int, str, list[float]]] = []
+    if page_chunks:
+        # The title gives each chunk document context; the stored text stays raw.
+        texts = [f"{title}\n{c.text}" for c in page_chunks]
+        vector_rows = embedder.encode_passages(texts, batch_size=cfg.embedding.batch_size)
+        rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
 
-    # The title gives each chunk document context; the stored text stays raw.
-    texts = [f"{title}\n{c.text}" for c in page_chunks]
-    vector_rows = embedder.encode_passages(texts, batch_size=cfg.embedding.batch_size)
-
-    doc_id = db.insert_document(
+    # A file with no text is recorded too, so the next run skips it.
+    _, inserted = db.replace_document(
+        delete_ids=list(existing),
         file_path=str(pdf_path),
         file_hash=file_hash,
         file_name=pdf_path.name,
         page_count=page_count,
+        rows=rows,
     )
-    rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
-    inserted = db.insert_chunks(doc_id, rows)
+    if not rows:
+        return replace(stats, no_text=stats.no_text + 1), "no text (scanned? run ocrmypdf first)"
 
     stats = replace(stats, chunks=stats.chunks + inserted)
-    if replaced:
+    if existing:
         return replace(stats, reindexed=stats.reindexed + 1), f"re-indexed, {inserted} chunks"
     return replace(stats, indexed=stats.indexed + 1), f"{inserted} chunks"
 
@@ -177,8 +180,15 @@ def index_path(
     cfg: AppConfig,
     embedder: Embedder,
     reindex: bool = False,
+    since: str | None = None,
     progress: Callable[[str], None] = logger.info,
 ) -> IndexStats:
+    """Index PDFs under `path`.
+
+    With `reindex`, files already in the index are indexed again. `since` (a
+    ``documents.indexed_at`` value) skips files indexed at or after that time, so an
+    interrupted re-index run can resume.
+    """
     base = Path(path).expanduser().resolve()
     if base.is_file():
         if not _is_pdf_file(base):
@@ -193,7 +203,7 @@ def index_path(
     for i, pdf_path in enumerate(pdfs, start=1):
         started = time.monotonic()
         try:
-            stats, note = _index_file(pdf_path, db, cfg, embedder, reindex, stats)
+            stats, note = _index_file(pdf_path, db, cfg, embedder, reindex, since, stats)
         except Exception as exc:
             stats, note = replace(stats, skipped=stats.skipped + 1), f"failed: {exc}"
         elapsed = time.monotonic() - started

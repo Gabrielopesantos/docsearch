@@ -19,6 +19,21 @@ class DocumentRecord:
     file_hash: str
     file_name: str
     page_count: int
+    indexed_at: str
+
+
+_DOCUMENT_COLUMNS = "id, file_path, file_hash, file_name, page_count, indexed_at"
+
+
+def _document_from_row(row: tuple) -> DocumentRecord:
+    return DocumentRecord(
+        id=int(row[0]),
+        file_path=str(row[1]),
+        file_hash=str(row[2]),
+        file_name=str(row[3]),
+        page_count=int(row[4]),
+        indexed_at=str(row[5]),
+    )
 
 
 @dataclass(frozen=True)
@@ -166,45 +181,19 @@ class Database:
 
     def get_document_by_hash(self, file_hash: str) -> DocumentRecord | None:
         row = self.conn.execute(
-            """
-            SELECT id, file_path, file_hash, file_name, page_count
-            FROM documents
-            WHERE file_hash = ?
-            """,
-            (file_hash,),
+            f"SELECT {_DOCUMENT_COLUMNS} FROM documents WHERE file_hash = ?", (file_hash,)
         ).fetchone()
-        if row is None:
-            return None
-        return DocumentRecord(
-            id=int(row[0]),
-            file_path=str(row[1]),
-            file_hash=str(row[2]),
-            file_name=str(row[3]),
-            page_count=int(row[4]),
-        )
+        return None if row is None else _document_from_row(row)
 
     def get_document_by_path(self, file_path: str) -> DocumentRecord | None:
         row = self.conn.execute(
-            """
-            SELECT id, file_path, file_hash, file_name, page_count
-            FROM documents
-            WHERE file_path = ?
-            """,
-            (file_path,),
+            f"SELECT {_DOCUMENT_COLUMNS} FROM documents WHERE file_path = ?", (file_path,)
         ).fetchone()
-        if row is None:
-            return None
-        return DocumentRecord(
-            id=int(row[0]),
-            file_path=str(row[1]),
-            file_hash=str(row[2]),
-            file_name=str(row[3]),
-            page_count=int(row[4]),
-        )
+        return None if row is None else _document_from_row(row)
 
-    def delete_document(self, document_id: int) -> None:
-        self.conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
-        self.conn.commit()
+    def now(self) -> str:
+        """Current time in the same clock and format as ``documents.indexed_at``."""
+        return str(self.conn.execute("SELECT datetime('now')").fetchone()[0])
 
     def delete_document_by_path_or_hash(self, key: str) -> int:
         cur = self.conn.execute(
@@ -213,12 +202,33 @@ class Database:
         self.conn.commit()
         return int(cur.rowcount or 0)
 
-    def insert_document(
+    def replace_document(
         self,
+        delete_ids: Iterable[int],
         file_path: str,
         file_hash: str,
         file_name: str,
         page_count: int,
+        rows: Iterable[tuple[int, int, str, list[float]]],
+    ) -> tuple[int, int]:
+        """Delete old documents and insert the new one with its chunks in one transaction.
+
+        An interrupt (Ctrl+C) or error rolls back, so the index keeps the old state.
+        Returns (document id, chunks inserted).
+        """
+        try:
+            for document_id in delete_ids:
+                self.conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            doc_id = self._insert_document(file_path, file_hash, file_name, page_count)
+            inserted = self._insert_chunks(doc_id, rows)
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
+        return doc_id, inserted
+
+    def _insert_document(
+        self, file_path: str, file_hash: str, file_name: str, page_count: int
     ) -> int:
         cur = self.conn.execute(
             """
@@ -227,10 +237,9 @@ class Database:
             """,
             (file_path, file_hash, file_name, page_count),
         )
-        self.conn.commit()
         return int(cur.lastrowid)
 
-    def insert_chunks(
+    def _insert_chunks(
         self,
         document_id: int,
         rows: Iterable[tuple[int, int, str, list[float]]],
@@ -247,7 +256,6 @@ class Database:
                 """,
                 params,
             )
-            self.conn.commit()
         return len(params)
 
     def resolve_document_ids(self, keys: list[str]) -> list[int]:
@@ -365,18 +373,9 @@ class Database:
 
     def list_all_documents(self) -> list[DocumentRecord]:
         rows = self.conn.execute(
-            "SELECT id, file_path, file_hash, file_name, page_count FROM documents ORDER BY id"
+            f"SELECT {_DOCUMENT_COLUMNS} FROM documents ORDER BY id"
         ).fetchall()
-        return [
-            DocumentRecord(
-                id=int(r[0]),
-                file_path=str(r[1]),
-                file_hash=str(r[2]),
-                file_name=str(r[3]),
-                page_count=int(r[4]),
-            )
-            for r in rows
-        ]
+        return [_document_from_row(r) for r in rows]
 
     def list_documents_with_chunk_counts(self) -> list[DocumentSummary]:
         """Return one DocumentSummary per indexed document, newest first."""

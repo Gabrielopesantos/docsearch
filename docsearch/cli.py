@@ -46,7 +46,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_index.add_argument(
         "--reindex",
         action="store_true",
-        help="Re-index existing paths when content changed",
+        help="Re-index files already in the index",
+    )
+    p_index.add_argument(
+        "--since",
+        metavar="TIME",
+        help="With --reindex: skip files indexed at or after TIME (UTC, from the resume hint)",
     )
 
     p_search = sub.add_parser("search", help="Search indexed PDF content")
@@ -97,20 +102,49 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
+def _resume_command(since: str) -> str:
+    """The current command line with ``--since <since>`` in place of any earlier --since."""
+    import shlex
+    import sys
+
+    argv: list[str] = []
+    rest = iter(sys.argv[1:])
+    for arg in rest:
+        if arg == "--since":
+            next(rest, None)
+        elif not arg.startswith("--since="):
+            argv.append(arg)
+    return shlex.join(["docsearch", *argv, "--since", since])
+
+
 def _cmd_index(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
     import sys
 
     from docsearch.indexer import index_path
 
+    # A resumed run keeps the first run's start time, so files it re-indexed stay done.
+    since = args.since if args.since is not None else db.now()
+    if args.reindex:
+        print(f"re-index started at {since} UTC", file=sys.stderr, flush=True)
+
     # Progress goes to stderr so JSON output on stdout stays clean.
-    stats = index_path(
-        path=args.path,
-        db=db,
-        cfg=cfg,
-        embedder=embedder,
-        reindex=args.reindex,
-        progress=lambda msg: print(msg, file=sys.stderr, flush=True),
-    )
+    try:
+        stats = index_path(
+            path=args.path,
+            db=db,
+            cfg=cfg,
+            embedder=embedder,
+            reindex=args.reindex,
+            since=args.since,
+            progress=lambda msg: print(msg, file=sys.stderr, flush=True),
+        )
+    except KeyboardInterrupt:
+        print("\ninterrupted; finished files are saved.", file=sys.stderr)
+        if args.reindex:
+            print(f"resume with: {_resume_command(since)}", file=sys.stderr)
+        else:
+            print("resume with the same command.", file=sys.stderr)
+        sys.exit(130)
 
     if output_fmt == "json":
         print(json.dumps(asdict(stats), indent=2))
