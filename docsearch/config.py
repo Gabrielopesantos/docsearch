@@ -33,7 +33,7 @@ class SearchConfig:
 @dataclass(frozen=True)
 class RerankConfig:
     enabled: bool = True
-    model_name: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    model_name: str = "BAAI/bge-reranker-v2-m3"
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ DEFAULT_CONFIG_TEMPLATE = """# docsearch configuration file
 [embedding]
 # Local sentence-transformers model name. The index remembers which model
 # built it; changing this needs a new index (--db or delete the index file).
-# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-m3" is stronger.
+# Multilingual and fast, also on CPU.
 model_name = "intfloat/multilingual-e5-small"
 # Where to cache downloaded model files
 model_cache_dir = "~/.cache/docsearch/models"
@@ -83,9 +83,10 @@ top_k = 5
 
 [rerank]
 # Cross-encoder that re-scores the top candidates. Scores are 0..1.
-# Multilingual and CPU-friendly default. With a GPU, "BAAI/bge-reranker-v2-m3" is stronger.
+# Multilingual. Slow on CPU; there, "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+# is faster but less precise.
 enabled = true
-model_name = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+model_name = "BAAI/bge-reranker-v2-m3"
 
 [storage]
 # Local libSQL database file path
