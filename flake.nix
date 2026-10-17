@@ -30,7 +30,8 @@
           ];
 
           # Prebuilt wheels (torch, numpy) load these from the system.
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+          # /run/opengl-driver/lib holds the NixOS NVIDIA driver (libcuda.so) for torch.
+          LD_LIBRARY_PATH = "/run/opengl-driver/lib:" + pkgs.lib.makeLibraryPath [
             pkgs.stdenv.cc.cc.lib
             pkgs.zlib
           ];
