@@ -64,7 +64,8 @@ search: query ─┬─► FTS5 bm25 top 50 ──────┐
 
 The first run creates `~/.config/docsearch/config.toml`. See
 [`config.toml.example`](./config.toml.example) for all settings.
-CLI flags override the config file.
+CLI flags override the config file. Global flags such as `--db` and `-o json`
+work before or after the subcommand.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

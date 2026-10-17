@@ -8,40 +8,57 @@ from pathlib import Path
 from docsearch.config import DEFAULT_CONFIG_PATH, load_config, with_overrides
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="docsearch",
-        description="Index and search PDFs with local embeddings",
-    )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config TOML")
-    parser.add_argument("--db", help="Override database path")
-    parser.add_argument("--model", help="Override embedding model name")
-    parser.add_argument("--batch-size", type=int, help="Override embedding batch size")
-    parser.add_argument(
+def _global_options(with_defaults: bool) -> argparse.ArgumentParser:
+    """Options accepted before or after the subcommand.
+
+    The top-level parser gets the defaults. Subcommands get SUPPRESS, so they set
+    only the options typed after the subcommand and keep values typed before it.
+    """
+    if with_defaults:
+        common = argparse.ArgumentParser(add_help=False)
+        common.set_defaults(config=str(DEFAULT_CONFIG_PATH), output="pretty")
+    else:
+        common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
+    common.add_argument("--config", help="Path to config TOML")
+    common.add_argument("--db", help="Override database path")
+    common.add_argument("--model", help="Override embedding model name")
+    common.add_argument("--batch-size", type=int, help="Override embedding batch size")
+    common.add_argument(
         "--device",
         choices=["auto", "cpu", "cuda"],
         help="Device for models (default: auto, GPU if available)",
     )
-    parser.add_argument("--max-tokens", type=int, help="Override maximum tokens per chunk")
-    parser.add_argument(
+    common.add_argument("--max-tokens", type=int, help="Override maximum tokens per chunk")
+    common.add_argument(
         "--overlap-sentences", type=int, help="Override sentences repeated between chunks"
     )
-    parser.add_argument(
+    common.add_argument(
         "-o",
         "--output",
         choices=["pretty", "json"],
-        default="pretty",
         help="Output format (default: pretty)",
     )
-    parser.add_argument(
+    common.add_argument(
         "--update-model",
         action="store_true",
         help="Re-download the embedding model from Hugging Face Hub",
     )
+    return common
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="docsearch",
+        description="Index and search PDFs with local embeddings",
+        parents=[_global_options(with_defaults=True)],
+    )
+    common = _global_options(with_defaults=False)
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_index = sub.add_parser("index", help="Index all PDFs in a directory or a single PDF file")
+    p_index = sub.add_parser(
+        "index", help="Index all PDFs in a directory or a single PDF file", parents=[common]
+    )
     p_index.add_argument("path", help="Directory containing PDFs or a single PDF file")
     p_index.add_argument(
         "--reindex",
@@ -54,7 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --reindex: skip files indexed at or after TIME (UTC, from the resume hint)",
     )
 
-    p_search = sub.add_parser("search", help="Search indexed PDF content")
+    p_search = sub.add_parser("search", help="Search indexed PDF content", parents=[common])
     p_search.add_argument("query", help="Natural language query")
     p_search.add_argument("-n", "--top-k", type=int, help="Number of results")
     p_search.add_argument(
@@ -78,7 +95,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit search to this document (repeat for multiple); accepts file path or SHA-256 hash",
     )
 
-    p_eval = sub.add_parser("eval", help="Score search quality against an eval file")
+    p_eval = sub.add_parser(
+        "eval", help="Score search quality against an eval file", parents=[common]
+    )
     p_eval.add_argument("eval_file", help="TOML file with [[case]] query/expect entries")
     p_eval.add_argument(
         "--no-rerank",
@@ -88,10 +107,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Score without the cross-encoder reranker",
     )
 
-    sub.add_parser("status", help="Show index stats and document listing")
-    sub.add_parser("sync", help="Remove index entries for PDFs that no longer exist on disk")
+    sub.add_parser("status", help="Show index stats and document listing", parents=[common])
+    sub.add_parser(
+        "sync", help="Remove index entries for PDFs that no longer exist on disk", parents=[common]
+    )
 
-    p_remove = sub.add_parser("remove", help="Remove a document by path or hash")
+    p_remove = sub.add_parser("remove", help="Remove a document by path or hash", parents=[common])
     p_remove.add_argument("key", help="Absolute file path or SHA-256 hash")
 
     return parser
