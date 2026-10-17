@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from sentence_transformers import CrossEncoder
 
-from docsearch.embedding import resolve_device
+from docsearch.embedding import quiet_transformers, resolve_device
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ def load_reranker(
     device: str = "auto",
 ) -> Reranker:
     """Load a cross-encoder, local-first like load_embedder."""
+    quiet_transformers()
     dev = resolve_device(device)
     if update:
         return Reranker(CrossEncoder(model_name, cache_folder=cache_dir, device=dev))

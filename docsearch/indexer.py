@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -116,12 +117,67 @@ def _is_pdf_file(path: Path) -> bool:
         return False
 
 
+def _index_file(
+    pdf_path: Path,
+    db: Database,
+    cfg: AppConfig,
+    embedder: Embedder,
+    reindex: bool,
+    stats: IndexStats,
+) -> tuple[IndexStats, str]:
+    """Index one PDF. Returns updated stats and a short note for progress output."""
+    replaced = False
+    file_hash = sha256_file(pdf_path)
+    for existing in (db.get_document_by_hash(file_hash), db.get_document_by_path(str(pdf_path))):
+        if existing is None:
+            continue
+        if not reindex:
+            return replace(stats, skipped=stats.skipped + 1), "skipped (already indexed)"
+        db.delete_document(existing.id)
+        replaced = True
+
+    page_chunks, page_count, title = extract_page_chunks(
+        pdf_path,
+        max_tokens=cfg.chunking.max_tokens,
+        overlap_sentences=cfg.chunking.overlap_sentences,
+        count_tokens=embedder.count_tokens,
+    )
+    if not page_chunks:
+        # Record it so the next run skips it, but report it apart.
+        db.insert_document(
+            file_path=str(pdf_path),
+            file_hash=file_hash,
+            file_name=pdf_path.name,
+            page_count=page_count,
+        )
+        return replace(stats, no_text=stats.no_text + 1), "no text (scanned? run ocrmypdf first)"
+
+    # The title gives each chunk document context; the stored text stays raw.
+    texts = [f"{title}\n{c.text}" for c in page_chunks]
+    vector_rows = embedder.encode_passages(texts, batch_size=cfg.embedding.batch_size)
+
+    doc_id = db.insert_document(
+        file_path=str(pdf_path),
+        file_hash=file_hash,
+        file_name=pdf_path.name,
+        page_count=page_count,
+    )
+    rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
+    inserted = db.insert_chunks(doc_id, rows)
+
+    stats = replace(stats, chunks=stats.chunks + inserted)
+    if replaced:
+        return replace(stats, reindexed=stats.reindexed + 1), f"re-indexed, {inserted} chunks"
+    return replace(stats, indexed=stats.indexed + 1), f"{inserted} chunks"
+
+
 def index_path(
     path: str,
     db: Database,
     cfg: AppConfig,
     embedder: Embedder,
     reindex: bool = False,
+    progress: Callable[[str], None] = logger.info,
 ) -> IndexStats:
     base = Path(path).expanduser().resolve()
     if base.is_file():
@@ -134,73 +190,13 @@ def index_path(
         raise ValueError(f"Path does not exist: {base}")
     stats = IndexStats(scanned=len(pdfs))
 
-    for pdf_path in pdfs:
+    for i, pdf_path in enumerate(pdfs, start=1):
+        started = time.monotonic()
         try:
-            replaced = False
-            file_hash = sha256_file(pdf_path)
-            existing_hash = db.get_document_by_hash(file_hash)
-            if existing_hash is not None:
-                if reindex:
-                    db.delete_document(existing_hash.id)
-                    replaced = True
-                else:
-                    stats = replace(stats, skipped=stats.skipped + 1)
-                    continue
-
-            existing_path = db.get_document_by_path(str(pdf_path))
-            if existing_path is not None:
-                if reindex:
-                    db.delete_document(existing_path.id)
-                    replaced = True
-                else:
-                    stats = replace(stats, skipped=stats.skipped + 1)
-                    continue
-
-            page_chunks, page_count, title = extract_page_chunks(
-                pdf_path,
-                max_tokens=cfg.chunking.max_tokens,
-                overlap_sentences=cfg.chunking.overlap_sentences,
-                count_tokens=embedder.count_tokens,
-            )
-            if not page_chunks:
-                # Record it so the next run skips it, but report it apart.
-                db.insert_document(
-                    file_path=str(pdf_path),
-                    file_hash=file_hash,
-                    file_name=pdf_path.name,
-                    page_count=page_count,
-                )
-                logger.warning(
-                    "No text in %s (probably a scanned PDF; try `ocrmypdf` first)", pdf_path
-                )
-                stats = replace(stats, no_text=stats.no_text + 1)
-                continue
-
-            # The title gives each chunk document context; the stored text stays raw.
-            texts = [f"{title}\n{c.text}" for c in page_chunks]
-            vector_rows = embedder.encode_passages(texts, batch_size=cfg.embedding.batch_size)
-
-            doc_id = db.insert_document(
-                file_path=str(pdf_path),
-                file_hash=file_hash,
-                file_name=pdf_path.name,
-                page_count=page_count,
-            )
-
-            rows = [(i, c.page_number, c.text, vector_rows[i]) for i, c in enumerate(page_chunks)]
-            inserted_chunks = db.insert_chunks(doc_id, rows)
-
-            if replaced:
-                stats = replace(
-                    stats, reindexed=stats.reindexed + 1, chunks=stats.chunks + inserted_chunks
-                )
-            else:
-                stats = replace(
-                    stats, indexed=stats.indexed + 1, chunks=stats.chunks + inserted_chunks
-                )
-
+            stats, note = _index_file(pdf_path, db, cfg, embedder, reindex, stats)
         except Exception as exc:
-            logger.warning("Skipping %s: %s", pdf_path, exc)
-            stats = replace(stats, skipped=stats.skipped + 1)
+            stats, note = replace(stats, skipped=stats.skipped + 1), f"failed: {exc}"
+        elapsed = time.monotonic() - started
+        progress(f"[{i}/{len(pdfs)}] {pdf_path.name}: {note} ({elapsed:.1f}s)")
 
     return stats

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sentence_transformers import SentenceTransformer
+from transformers.utils import logging as hf_logging
 
 
 def default_prefixes(model_name: str) -> tuple[str, str]:
@@ -48,6 +49,15 @@ class Embedder:
         ).tolist()
 
 
+def quiet_transformers() -> None:
+    """Hide transformers load reports, tokenizer length warnings and weight-loading bars.
+
+    Hub download progress still shows, so a first-run download is visible.
+    """
+    hf_logging.set_verbosity_error()
+    hf_logging.disable_progress_bar()
+
+
 def resolve_device(device: str) -> str | None:
     """Map the config value to a sentence-transformers device ("auto" lets it pick)."""
     return None if device == "auto" else device
@@ -67,6 +77,7 @@ def load_embedder(
     download from Hugging Face Hub (e.g. to pick up upstream weight
     updates).
     """
+    quiet_transformers()
     dev = resolve_device(device)
     if update:
         model = SentenceTransformer(model_name, cache_folder=cache_dir, device=dev)

@@ -98,14 +98,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_index(args: argparse.Namespace, cfg, db, embedder, output_fmt: str) -> None:
+    import sys
+
     from docsearch.indexer import index_path
 
+    # Progress goes to stderr so JSON output on stdout stays clean.
     stats = index_path(
         path=args.path,
         db=db,
         cfg=cfg,
         embedder=embedder,
         reindex=args.reindex,
+        progress=lambda msg: print(msg, file=sys.stderr, flush=True),
     )
 
     if output_fmt == "json":

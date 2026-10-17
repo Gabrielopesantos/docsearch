@@ -19,16 +19,22 @@ def split_sentences(text: str) -> list[str]:
 
 
 def _split_long(sentence: str, max_tokens: int, count_tokens: Callable[[str], int]) -> list[str]:
-    """Split one over-long sentence into word windows that fit the budget."""
+    """Split one over-long sentence into word windows that fit the budget.
+
+    Counts each word once and sums the counts, so the cost is linear in the
+    sentence length. The sum can differ slightly from the count of the joined
+    text, which is fine for a budget well below the model limit.
+    """
     parts: list[str] = []
     current: list[str] = []
+    current_tokens = 0
     for word in sentence.split():
-        candidate = " ".join([*current, word])
-        if current and count_tokens(candidate) > max_tokens:
+        n = count_tokens(word)
+        if current and current_tokens + n > max_tokens:
             parts.append(" ".join(current))
-            current = [word]
-        else:
-            current.append(word)
+            current, current_tokens = [], 0
+        current.append(word)
+        current_tokens += n
     if current:
         parts.append(" ".join(current))
     return parts
