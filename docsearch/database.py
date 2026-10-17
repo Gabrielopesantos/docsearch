@@ -135,12 +135,6 @@ class Database:
             ON chunks (document_id)
             """
         )
-        self.conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_chunks_vector
-            ON chunks (libsql_vector_idx(embedding))
-            """
-        )
         # Keyword index over chunk text. remove_diacritics folds accents, so
         # "servico" matches "serviço". Triggers keep it in sync with chunks,
         # including rows removed by ON DELETE CASCADE.
@@ -307,33 +301,20 @@ class Database:
     ) -> list[int]:
         """Return chunk ids nearest to the query vector, best first.
 
-        Without a document filter this uses the approximate vector index. With a
-        filter it scans only those documents' chunks, which is exact and cannot
-        miss hits the way post-filtering a global top-k can.
+        Scans every chunk (or only the filtered documents' chunks), so the result
+        is exact. The cost grows linearly with the number of chunks.
         """
-        query_json = json.dumps(query_embedding)
-        if document_ids is None:
-            rows = self.conn.execute(
-                """
-                SELECT c.id
-                FROM vector_top_k('idx_chunks_vector', vector32(?), ?) AS vt
-                JOIN chunks c ON c.rowid = vt.id
-                ORDER BY vector_distance_cos(c.embedding, vector32(?)) ASC
-                """,
-                (query_json, limit, query_json),
-            ).fetchall()
-        else:
-            where, params = self._doc_filter(document_ids)
-            rows = self.conn.execute(
-                f"""
-                SELECT c.id
-                FROM chunks c
-                WHERE 1 = 1 {where}
-                ORDER BY vector_distance_cos(c.embedding, vector32(?)) ASC
-                LIMIT ?
-                """,
-                (*params, query_json, limit),
-            ).fetchall()
+        where, params = self._doc_filter(document_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT c.id
+            FROM chunks c
+            WHERE 1 = 1 {where}
+            ORDER BY vector_distance_cos(c.embedding, vector32(?)) ASC
+            LIMIT ?
+            """,
+            (*params, json.dumps(query_embedding), limit),
+        ).fetchall()
         return [int(r[0]) for r in rows]
 
     def keyword_candidates(
